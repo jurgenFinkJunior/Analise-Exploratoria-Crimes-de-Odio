@@ -33,6 +33,7 @@ columns_to_keep = [
     "multiple_offense", 
     "multiple_bias"
 ]
+df = df[columns_to_keep]
 
 def victims_by_year():
     crime_by_year = df.groupby('data_year')['total_individual_victims'].sum()
@@ -119,3 +120,5 @@ if __name__ == "__main__":
     race_on_race()
     victims_by_bias(2024)
     race_on_race(2024)
+
+    #TODO: histogram by date separated by transfer of power date of presidency (round to year, its close anyway)
