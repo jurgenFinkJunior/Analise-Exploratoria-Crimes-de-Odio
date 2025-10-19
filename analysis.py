@@ -86,6 +86,15 @@ df['party'] = df['president'].map(parties)
 
 print(df.head())
 
+print("Distinct Offender Race Counts:")
+print(df['offender_race'].value_counts())
+
+print("Distinct Bias Counts:")
+df_expl = df.assign(bias_desc=df['bias_desc'].str.split(MULTIPLE_SEP)).explode('bias_desc')
+#keep only the ones with more than one occurrence to remove strange values with typos and such
+df_expl = df_expl[df_expl['bias_desc'].map(df_expl['bias_desc'].value_counts()) > 1]
+print(df_expl['bias_desc'].value_counts())
+
 def victims_by_year():
     crime_by_year = df.groupby('data_year')['total_individual_victims'].sum()
     plt.figure(figsize=(10, 6))
@@ -136,7 +145,7 @@ def race_on_race(year=None):
         'Anti-White': 'White',
         'Anti-Asian': 'Asian',
         'Anti-Native Hawaiian or Other Pacific Islander': 'Native Hawaiian or Other Pacific Islander',
-        'Anti-American Indian or Alaska Native': 'American Indian or Alaska Native'
+        'Anti-American Indian or Alaska Native': 'American Indian or Alaska Native',
     }
     df_race = df_race.replace({'bias_desc': bias_to_victim_race})
 
@@ -219,12 +228,47 @@ def victims_by_presidential_terms():
     plt.savefig(OUTPUT_DIR + 'hate_crime_victims_by_presidential_terms_histogram.png', dpi=300, bbox_inches='tight')
     plt.show()
 
+def boxplot_of_victims_per_crime():
+    df_clean = df.dropna(subset=['total_individual_victims'])
+    #keep only rows with 10 or more victims
+    df_clean = df_clean[df_clean['total_individual_victims'] > 9]
+    #split offense_name by MULTIPLE_SEP and explode to have one offense per row
+    df_expanded = df_clean.assign(offense_name=df['offense_name'].str.split(MULTIPLE_SEP)).explode('offense_name')
+    #keep only selected offense names to avoid clutter
+    top_offenses = df_expanded['offense_name'].value_counts().nlargest(6).index
+    df_expanded = df_expanded[df_expanded['offense_name'].isin(top_offenses)]
+    
+    plt.figure(figsize=(12, 8))
+    
+    # Create horizontal boxplot using matplotlib
+    offense_names = df_expanded['offense_name'].unique()
+    data_by_offense = [df_expanded[df_expanded['offense_name'] == offense]['total_individual_victims'].values 
+                      for offense in offense_names]
+    
+    # Create horizontal boxplot
+    box_plot = plt.boxplot(data_by_offense, vert=False, patch_artist=True, labels=offense_names)
+    
+    # Color the boxes
+    colors = ['lightblue', 'lightgreen', 'lightcoral', 'lightyellow', 'lightpink', 'lightgray']
+    for patch, color in zip(box_plot['boxes'], colors[:len(box_plot['boxes'])]):
+        patch.set_facecolor(color)
+    
+    plt.title('Number of Victims in Crimes with 10 or more Victims by Offense Name', fontsize=14)
+    plt.xlabel('Number of Victims')
+    plt.ylabel('Offense Name')
+    plt.xscale('log')  # Use logarithmic scale for better visibility
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'boxplot_victims_per_crime_horizontal.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
 if __name__ == "__main__":
-    victims_by_year()
-    victims_by_bias()
-    race_on_race()
-    victims_by_bias(2024)
-    race_on_race(2024)
-    victims_by_presidential_terms()
+    #victims_by_year()
+    #victims_by_bias()
+    #race_on_race()
+    #victims_by_bias(2024)
+    #race_on_race(2024)
+    #victims_by_presidential_terms()
+    boxplot_of_victims_per_crime()
 
     #TODO: download population by race by year to do per capita
