@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
@@ -884,6 +885,7 @@ def hate_crime_story_timeline():
     print(f"\nStory timeline saved as: {OUTPUT_DIR}hate_crime_story_timeline.png")
 
 if __name__ == "__main__":
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     victims_by_year()
     victims_by_bias()
     victims_by_bias(2024)
