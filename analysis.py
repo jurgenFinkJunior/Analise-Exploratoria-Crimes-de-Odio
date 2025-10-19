@@ -489,13 +489,412 @@ def geomap_evolution_by_decade():
     
     print(f"\nEvolution map saved as: {OUTPUT_DIR}geomap_evolution_by_decade.png")
 
+def bias_trends_over_time():
+    """Create a sophisticated timeline showing how different bias categories have evolved"""
+    # Categorize bias types into major groups
+    bias_categories = {
+        'Racial': ['Anti-Black or African American', 'Anti-White', 'Anti-Asian', 
+                  'Anti-Native Hawaiian or Other Pacific Islander', 'Anti-American Indian or Alaska Native',
+                  'Anti-Multiple Races, Group', 'Anti-Arab', 'Anti-Hispanic or Latino', 'Anti-Not Hispanic or Latino'],
+        'Religious': ['Anti-Jewish', 'Anti-Islamic (Muslim)', 'Anti-Catholic', 'Anti-Protestant',
+                     'Anti-Other Religion', 'Anti-Multiple Religions, Group', 'Anti-Atheism/Agnosticism',
+                     'Anti-Orthodox (Russian, Greek, Other)', 'Anti-Other Christian', 'Anti-Mormon',
+                     'Anti-Jehovah\'s Witness', 'Anti-Eastern Orthodox (Russian, Greek, Other)',
+                     'Anti-Hindu', 'Anti-Buddhist', 'Anti-Sikh'],
+        'Sexuality and Gender': ['Anti-Gay (Male)', 'Anti-Lesbian', 'Anti-Lesbian, Gay, Bisexual, or Transgender (Mixed Group)',
+                              'Anti-Heterosexual', 'Anti-Bisexual', 'Anti-Transgender', 'Anti-Gender Non-Conforming'],
+        'Disability': ['Anti-Physical Disability', 'Anti-Mental Disability']
+    }
+    
+    # Create a figure with 2x2 subplots for 4 categories
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    axes = axes.flatten()
+    
+    # Color palette for different categories
+    colors = ['#e74c3c', '#3498db', '#9b59b6', '#f39c12']
+    
+    for idx, (category, bias_list) in enumerate(bias_categories.items()):
+        ax = axes[idx]
+        
+        # Filter and expand data for this category
+        category_data = df[df['bias_desc'].isin(bias_list)]
+        category_expanded = category_data.assign(bias_desc=category_data['bias_desc'].str.split(MULTIPLE_SEP)).explode('bias_desc')
+        category_expanded = category_expanded[category_expanded['bias_desc'].isin(bias_list)]
+        
+        # Group by year and bias type
+        yearly_data = category_expanded.groupby(['data_year', 'bias_desc'])['total_individual_victims'].sum().unstack(fill_value=0)
+        
+        # Create a mapping for long labels to shorter ones
+        label_mapping = {
+            'Anti-Lesbian, Gay, Bisexual, or Transgender (Mixed Group)': 'Anti-LGBT (Mixed)',
+            'Anti-Eastern Orthodox (Russian, Greek, Other)': 'Anti-Eastern Orthodox',
+            'Anti-Native Hawaiian or Other Pacific Islander': 'Anti-Pacific Islander',
+            'Anti-American Indian or Alaska Native': 'Anti-Native American'
+        }
+        
+        # Rename columns with shorter labels
+        yearly_data.columns = [label_mapping.get(col, col) for col in yearly_data.columns]
+        
+        # Create stacked area plot
+        yearly_data.plot(kind='area', ax=ax, alpha=0.7, color=plt.cm.Set3(np.linspace(0, 1, len(yearly_data.columns))))
+        
+        ax.set_title(f'{category} Bias Crimes Over Time', fontsize=13, fontweight='bold', pad=20)
+        ax.set_xlabel('Year', fontsize=11)
+        ax.set_ylabel('Victims', fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=7)
+        
+        # Add trend line
+        total_by_year = yearly_data.sum(axis=1)
+        z = np.polyfit(total_by_year.index, total_by_year.values, 1)
+        p = np.poly1d(z)
+        ax.plot(total_by_year.index, p(total_by_year.index), "r--", alpha=0.8, linewidth=2)
+    
+    plt.suptitle('Evolution of Hate Crime Bias Categories (1991-2024)', fontsize=16, fontweight='bold', y=0.98)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.90)
+    plt.savefig(OUTPUT_DIR + 'bias_trends_over_time.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"Bias trends visualization saved as: {OUTPUT_DIR}bias_trends_over_time.png")
+
+def hate_crime_seasonality_heatmap():
+    """Create a calendar heatmap showing seasonal patterns in hate crimes"""
+    # Convert incident_date to datetime
+    df_clean = df.dropna(subset=['incident_date'])
+    df_clean['incident_date'] = pd.to_datetime(df_clean['incident_date'], errors='coerce')
+    df_clean = df_clean.dropna(subset=['incident_date'])
+    
+    # Extract month and day of year
+    df_clean['month'] = df_clean['incident_date'].dt.month
+    df_clean['day_of_year'] = df_clean['incident_date'].dt.dayofyear
+    df_clean['week_of_year'] = df_clean['incident_date'].dt.isocalendar().week
+    
+    # Create monthly heatmap
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12))
+    
+    # Monthly aggregation
+    monthly_crimes = df_clean.groupby(['data_year', 'month'])['total_individual_victims'].sum().unstack(fill_value=0)
+    
+    # Create heatmap
+    im1 = ax1.imshow(monthly_crimes.values, cmap='Reds', aspect='auto')
+    ax1.set_title('Hate Crimes by Month and Year', fontsize=16, fontweight='bold', pad=20)
+    ax1.set_xlabel('Month', fontsize=12)
+    ax1.set_ylabel('Year', fontsize=12)
+    ax1.set_xticks(range(12))
+    ax1.set_xticklabels(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
+    ax1.set_yticks(range(0, len(monthly_crimes), 5))
+    ax1.set_yticklabels(monthly_crimes.index[::5])
+    
+    # Add colorbar
+    cbar1 = plt.colorbar(im1, ax=ax1)
+    cbar1.set_label('Total Victims', fontsize=12)
+    
+    # Weekly pattern within year
+    weekly_pattern = df_clean.groupby('week_of_year')['total_individual_victims'].sum()
+    ax2.plot(weekly_pattern.index, weekly_pattern.values, linewidth=3, color='darkred', alpha=0.8)
+    ax2.fill_between(weekly_pattern.index, weekly_pattern.values, alpha=0.3, color='red')
+    ax2.set_title('Hate Crimes by Week of Year (All Years Combined)', fontsize=16, fontweight='bold', pad=20)
+    ax2.set_xlabel('Week of Year', fontsize=12)
+    ax2.set_ylabel('Total Victims', fontsize=12)
+    ax2.grid(True, alpha=0.3)
+    
+    # Add annotations for notable peaks
+    max_week = weekly_pattern.idxmax()
+    max_value = weekly_pattern.max()
+    ax2.annotate(f'Peak: Week {max_week}', 
+                xy=(max_week, max_value), xytext=(max_week+5, max_value+max_value*0.1),
+                arrowprops=dict(arrowstyle='->', color='black'),
+                fontsize=11, fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'hate_crime_seasonality.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"Seasonality heatmap saved as: {OUTPUT_DIR}hate_crime_seasonality.png")
+
+def regional_radar_comparison():
+    """Create radar charts comparing hate crime patterns across US regions"""
+    # Define US regions
+    regions = {
+        'Northeast': ['Connecticut', 'Maine', 'Massachusetts', 'New Hampshire', 'Rhode Island', 
+                     'Vermont', 'New Jersey', 'New York', 'Pennsylvania'],
+        'South': ['Delaware', 'Florida', 'Georgia', 'Maryland', 'North Carolina', 'South Carolina', 
+                 'Virginia', 'District of Columbia', 'West Virginia', 'Alabama', 'Kentucky', 
+                 'Mississippi', 'Tennessee', 'Arkansas', 'Louisiana', 'Oklahoma', 'Texas'],
+        'Midwest': ['Illinois', 'Indiana', 'Michigan', 'Ohio', 'Wisconsin', 'Iowa', 'Kansas', 
+                   'Minnesota', 'Missouri', 'Nebraska', 'North Dakota', 'South Dakota'],
+        'West': ['Arizona', 'Colorado', 'Idaho', 'Montana', 'Nevada', 'New Mexico', 'Utah', 
+                'Wyoming', 'Alaska', 'California', 'Hawaii', 'Oregon', 'Washington']
+    }
+    
+    # Create bias categories for radar chart
+    bias_categories = ['Anti-Black or African American', 'Anti-White', 'Anti-Hispanic or Latino', 'Anti-Asian',
+                       'Anti-Catholic', 'Anti-Jewish', 'Anti-Islamic (Muslim)',
+                       'Anti-Gay (Male)']
+    
+    # Calculate regional statistics
+    regional_stats = {}
+    
+    for region, states in regions.items():
+        region_df = df[df['state_name'].isin(states)]
+        region_expanded = region_df.assign(bias_desc=region_df['bias_desc'].str.split(MULTIPLE_SEP)).explode('bias_desc')
+        
+        stats = []
+        for bias in bias_categories:
+            bias_count = region_expanded[region_expanded['bias_desc'] == bias]['total_individual_victims'].sum()
+            stats.append(bias_count)
+        regional_stats[region] = stats
+    
+    # Normalize data (0-1 scale for each bias type across regions)
+    normalized_stats = {}
+    for i, bias in enumerate(bias_categories):
+        max_val = max([regional_stats[region][i] for region in regions.keys()])
+        if max_val > 0:
+            for region in regions.keys():
+                if region not in normalized_stats:
+                    normalized_stats[region] = []
+                normalized_stats[region].append(regional_stats[region][i] / max_val)
+        else:
+            for region in regions.keys():
+                if region not in normalized_stats:
+                    normalized_stats[region] = []
+                normalized_stats[region].append(0)
+    
+    # Create radar chart
+    fig, axes = plt.subplots(2, 2, figsize=(16, 16), subplot_kw=dict(projection='polar'))
+    axes = axes.flatten()
+    
+    colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12']
+    
+    for idx, (region, stats) in enumerate(normalized_stats.items()):
+        ax = axes[idx]
+        
+        # Number of variables
+        N = len(bias_categories)
+        
+        # Compute angle for each axis
+        angles = [n / float(N) * 2 * np.pi for n in range(N)]
+        angles += angles[:1]  # Complete the circle
+        
+        # Add values
+        values = stats + [stats[0]]  # Complete the circle
+        
+        # Plot
+        ax.plot(angles, values, 'o-', linewidth=2, label=region, color=colors[idx])
+        ax.fill(angles, values, alpha=0.25, color=colors[idx])
+        
+        # Add labels
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels([bias.replace('Anti-', '').replace(' or ', '/') for bias in bias_categories], fontsize=10)
+        ax.set_ylim(0, 1)
+        ax.set_title(f'{region} Region\nHate Crime Bias Pattern', fontsize=14, fontweight='bold', pad=20)
+        ax.grid(True)
+    
+    plt.suptitle('Regional Comparison of Hate Crime Bias Types\n(Normalized Scale)', fontsize=18, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'regional_radar_comparison.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"Regional radar comparison saved as: {OUTPUT_DIR}regional_radar_comparison.png")
+
+def offender_victim_flow_analysis():
+    """Create a sophisticated analysis of offender-victim demographic relationships"""
+    # Filter data with both offender and victim information
+    flow_df = df.dropna(subset=['offender_race']).copy()
+    flow_df = flow_df[~flow_df['offender_race'].isin(['Unknown', 'Not Specified', 'Multiple'])]
+    
+    # Create bias-to-victim mapping
+    bias_to_victim = {
+        'Anti-Black or African American': 'Black/African American',
+        'Anti-White': 'White',
+        'Anti-Asian': 'Asian',
+        'Anti-Hispanic or Latino': 'Hispanic/Latino',
+        'Anti-Jewish': 'Jewish',
+        'Anti-Islamic (Muslim)': 'Muslim'
+    }
+    
+    # Filter for main bias categories
+    flow_df = flow_df[flow_df['bias_desc'].isin(bias_to_victim.keys())].copy()
+    flow_df['victim_group'] = flow_df['bias_desc'].map(bias_to_victim)
+    
+    # Expand offender race (handle multiple races)
+    flow_expanded = flow_df.assign(offender_race=flow_df['offender_race'].str.split(MULTIPLE_SEP)).explode('offender_race')
+    
+    # Create cross-tabulation
+    cross_tab = pd.crosstab(flow_expanded['offender_race'], flow_expanded['victim_group'], 
+                           values=flow_expanded['total_individual_victims'], aggfunc='sum').fillna(0)
+    
+    # Create two visualizations: heatmap and chord-style plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+    
+    # Heatmap
+    im = ax1.imshow(cross_tab.values, cmap='Reds', aspect='auto')
+    ax1.set_title('Offender-Victim Demographic Matrix\n(Total Victims)', fontsize=14, fontweight='bold')
+    ax1.set_xlabel('Victim Group', fontsize=12)
+    ax1.set_ylabel('Offender Race', fontsize=12)
+    ax1.set_xticks(range(len(cross_tab.columns)))
+    ax1.set_xticklabels(cross_tab.columns, rotation=45, ha='right')
+    ax1.set_yticks(range(len(cross_tab.index)))
+    ax1.set_yticklabels(cross_tab.index)
+    
+    # Add text annotations
+    for i in range(len(cross_tab.index)):
+        for j in range(len(cross_tab.columns)):
+            value = cross_tab.iloc[i, j]
+            if value > 0:
+                ax1.text(j, i, f'{int(value)}', ha='center', va='center', 
+                        color='white' if value > cross_tab.values.max()/2 else 'black',
+                        fontweight='bold', fontsize=10)
+    
+    cbar = plt.colorbar(im, ax=ax1)
+    cbar.set_label('Number of Victims', fontsize=12)
+    
+    # Chord-style visualization (simplified)
+    # Calculate percentages for each offender group
+    offender_totals = cross_tab.sum(axis=1)
+    percentages = cross_tab.div(offender_totals, axis=0).fillna(0) * 100
+    
+    # Create stacked bar chart as chord alternative
+    bottom = np.zeros(len(percentages))
+    colors_chord = plt.cm.Set3(np.linspace(0, 1, len(cross_tab.columns)))
+    
+    for i, victim_group in enumerate(cross_tab.columns):
+        ax2.bar(range(len(percentages)), percentages.iloc[:, i], bottom=bottom, 
+               label=victim_group, color=colors_chord[i], alpha=0.8)
+        bottom += percentages.iloc[:, i]
+    
+    ax2.set_title('Offender Group Targeting Patterns\n(Percentage Distribution)', fontsize=14, fontweight='bold')
+    ax2.set_xlabel('Offender Race', fontsize=12)
+    ax2.set_ylabel('Percentage of Victims by Group', fontsize=12)
+    ax2.set_xticks(range(len(percentages)))
+    ax2.set_xticklabels(percentages.index, rotation=45, ha='right')
+    ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax2.set_ylim(0, 100)
+    
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'offender_victim_flow_analysis.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"Offender-victim flow analysis saved as: {OUTPUT_DIR}offender_victim_flow_analysis.png")
+
+def hate_crime_story_timeline():
+    """Create an innovative timeline that tells the story of hate crimes with key events"""
+    # Key historical events that might correlate with hate crime spikes
+    historical_events = {
+        2001: "September 11 Attacks",
+        2008: "Financial Crisis",
+        2012: "Trayvon Martin Case",
+        2015: "Charleston Church Shooting",
+        2016: "Presidential Election",
+        2017: "Charlottesville Rally",
+        2019: "El Paso Shooting",
+        2020: "COVID-19 & George Floyd",
+        2021: "Capitol Riot"
+    }
+    
+    # Calculate yearly totals and bias breakdowns
+    yearly_totals = df.groupby('data_year')['total_individual_victims'].sum()
+    
+    # Get top bias categories by year
+    df_expanded = df.assign(bias_desc=df['bias_desc'].str.split(MULTIPLE_SEP)).explode('bias_desc')
+    yearly_bias = df_expanded.groupby(['data_year', 'bias_desc'])['total_individual_victims'].sum().unstack(fill_value=0)
+    
+    # Create the story timeline
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(20, 16))
+    
+    # Main timeline
+    ax1.plot(yearly_totals.index, yearly_totals.values, linewidth=4, color='darkred', alpha=0.8)
+    ax1.fill_between(yearly_totals.index, yearly_totals.values, alpha=0.3, color='red')
+    
+    # Add event annotations
+    for year, event in historical_events.items():
+        if year in yearly_totals.index:
+            y_val = yearly_totals[year]
+            ax1.annotate(f'{year}: {event}', 
+                        xy=(year, y_val), xytext=(year, y_val + yearly_totals.max() * 0.1),
+                        arrowprops=dict(arrowstyle='->', color='black', alpha=0.7),
+                        fontsize=10, ha='center', fontweight='bold',
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor='yellow', alpha=0.7))
+    
+    ax1.set_title('The Story of Hate Crimes in America (1991-2024)\nTotal Victims Over Time with Historical Context', 
+                 fontsize=16, fontweight='bold', pad=20)
+    ax1.set_ylabel('Total Victims', fontsize=12)
+    ax1.grid(True, alpha=0.3)
+    
+    # Bias evolution stacked area
+    top_biases = ['Anti-Black or African American', 'Anti-White', 'Anti-Jewish', 'Anti-Islamic (Muslim)', 'Anti-Gay (Male)']
+    bias_subset = yearly_bias[top_biases].fillna(0)
+    
+    ax2.stackplot(bias_subset.index, bias_subset.T, 
+                 labels=top_biases, alpha=0.8,
+                 colors=['#e74c3c', '#3498db', '#9b59b6', '#f39c12', '#2ecc71'])
+    
+    ax2.set_title('Evolution of Major Bias Categories', fontsize=14, fontweight='bold')
+    ax2.set_ylabel('Victims', fontsize=12)
+    ax2.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    ax2.grid(True, alpha=0.3)
+    
+    # Moving average and volatility
+    window = 3
+    moving_avg = yearly_totals.rolling(window=window).mean()
+    volatility = yearly_totals.rolling(window=window).std()
+    
+    ax3.plot(yearly_totals.index, yearly_totals.values, 'o-', alpha=0.6, label='Annual Totals', color='gray')
+    ax3.plot(moving_avg.index, moving_avg.values, linewidth=3, label=f'{window}-Year Moving Average', color='darkblue')
+    ax3.fill_between(moving_avg.index, 
+                    moving_avg - volatility, moving_avg + volatility, 
+                    alpha=0.2, label='Volatility Band', color='blue')
+    
+    ax3.set_title('Trend Analysis: Moving Average and Volatility', fontsize=14, fontweight='bold')
+    ax3.set_xlabel('Year', fontsize=12)
+    ax3.set_ylabel('Victims', fontsize=12)
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'hate_crime_story_timeline.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    # Print some insights
+    print("\n" + "="*60)
+    print("HATE CRIME STORY INSIGHTS")
+    print("="*60)
+    
+    max_year = yearly_totals.idxmax()
+    max_victims = yearly_totals.max()
+    min_year = yearly_totals.idxmin()
+    min_victims = yearly_totals.min()
+    
+    print(f"Peak year: {max_year} with {int(max_victims):,} victims")
+    print(f"Lowest year: {min_year} with {int(min_victims):,} victims")
+    print(f"Overall trend: {(yearly_totals.iloc[-1] - yearly_totals.iloc[0]) / len(yearly_totals):.1f} victims/year average change")
+    
+    # Correlation with events
+    event_years = list(historical_events.keys())
+    event_victims = [yearly_totals.get(year, 0) for year in event_years]
+    avg_other_years = yearly_totals.drop(event_years, errors='ignore').mean()
+    avg_event_years = np.mean(event_victims)
+    
+    print(f"Average victims in event years: {avg_event_years:.0f}")
+    print(f"Average victims in other years: {avg_other_years:.0f}")
+    print(f"Event year impact: {((avg_event_years - avg_other_years) / avg_other_years * 100):.1f}% difference")
+    
+    print(f"\nStory timeline saved as: {OUTPUT_DIR}hate_crime_story_timeline.png")
+
 if __name__ == "__main__":
-    #victims_by_year()
-    #victims_by_bias()
-    #victims_by_bias(2024)
-    #race_on_race()
-    #race_on_race(2024)
-    #victims_by_presidential_terms()
-    #boxplot_of_victims_per_crime()
-    #geomap_of_victims_by_state()
+    victims_by_year()
+    victims_by_bias()
+    victims_by_bias(2024)
+    race_on_race()
+    race_on_race(2024)
+    victims_by_presidential_terms()
+    boxplot_of_victims_per_crime()
+    geomap_of_victims_by_state()
     geomap_evolution_by_decade()
+    bias_trends_over_time()
+    hate_crime_seasonality_heatmap()
+    regional_radar_comparison()
+    offender_victim_flow_analysis()
+    hate_crime_story_timeline()
