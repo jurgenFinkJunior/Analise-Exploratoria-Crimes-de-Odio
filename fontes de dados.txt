@@ -1,0 +1,8 @@
+CRIMES DE ÓDIO:
+    https://cde.ucr.cjis.gov/LATEST/webapp/#/pages/downloads#datasets
+    Quadro "Additional Datasets" -> Sanfona "Hate Crime" -> Botão "DOWNLOAD"
+
+
+
+TERMOS PRESIDENCIAIS NOS EUA:
+    https://www.whitehousehistory.org/the-presidents-timeline

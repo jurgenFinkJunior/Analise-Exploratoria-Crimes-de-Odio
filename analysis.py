@@ -35,6 +35,57 @@ columns_to_keep = [
 ]
 df = df[columns_to_keep]
 
+presidents = {
+    1991: 'Bush Sr',
+    1992: 'Bush Sr',
+    1993: 'Clinton',
+    1994: 'Clinton',
+    1995: 'Clinton',
+    1996: 'Clinton',
+    1997: 'Clinton',
+    1998: 'Clinton',
+    1999: 'Clinton',
+    2000: 'Clinton',
+    2001: 'Bush Jr',
+    2002: 'Bush Jr',
+    2003: 'Bush Jr',
+    2004: 'Bush Jr',
+    2005: 'Bush Jr',
+    2006: 'Bush Jr',
+    2007: 'Bush Jr',
+    2008: 'Bush Jr',
+    2009: 'Obama',
+    2010: 'Obama',
+    2011: 'Obama',
+    2012: 'Obama',
+    2013: 'Obama',
+    2014: 'Obama',
+    2015: 'Obama',
+    2016: 'Obama',
+    2017: 'Trump',
+    2018: 'Trump',
+    2019: 'Trump',
+    2020: 'Trump',
+    2021: 'Biden',
+    2022: 'Biden',
+    2023: 'Biden',
+    2024: 'Biden',
+}
+
+parties = {
+    'Bush Sr': 'Republican',
+    'Clinton': 'Democrat',
+    'Bush Jr': 'Republican',
+    'Obama': 'Democrat',
+    'Trump': 'Republican',
+    'Biden': 'Democrat',
+}
+
+df['president'] = df['data_year'].map(presidents)
+df['party'] = df['president'].map(parties)
+
+print(df.head())
+
 def victims_by_year():
     crime_by_year = df.groupby('data_year')['total_individual_victims'].sum()
     plt.figure(figsize=(10, 6))
@@ -114,11 +165,55 @@ def race_on_race(year=None):
     plt.savefig(OUTPUT_DIR + f'hate_crime_offender_race_vs_victim{"_" + str(year) if year else ""}.png')
     plt.show()
 
+def victims_by_president_and_party():
+    crime_by_president = df.groupby('president')['total_individual_victims'].sum()
+    crime_by_party = df.groupby('party')['total_individual_victims'].sum()
+
+    plt.figure(figsize=(10, 6))
+    crime_by_president.plot(kind='bar', color='lightgreen')
+    plt.title('Total Hate Crime Victims by U.S. President')
+    plt.xlabel('President')
+    plt.ylabel('Total Victims')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'hate_crime_victims_by_president.png')
+    plt.show()
+
+    plt.figure(figsize=(8, 6))
+    crime_by_party.plot(kind='bar', color='orange')
+    plt.title('Total Hate Crime Victims by Political Party')
+    plt.xlabel('Political Party')
+    plt.ylabel('Total Victims')
+    plt.xticks(rotation=0)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'hate_crime_victims_by_party.png')
+    plt.show()
+
+def histogram_by_presidential_term_colored_by_party():
+    plt.figure(figsize=(12, 6))
+    for term_years_president_party, group in df.groupby(['president', 'party']):
+        president, party = term_years_president_party
+        plt.hist(group['data_year'], bins=range(df['data_year'].min(), df['data_year'].max() + 2), 
+                 alpha=0.5, label=f'{president} ({party})', color=((0, 0, 1) if party == 'Democrat' else (1, 0, 0)))
+
+    plt.title('Hate Crime Incidents Over Time by Presidential Party')
+    plt.xlabel('Year')
+    plt.xticks(range(df['data_year'].min(), df['data_year'].max() + 1))
+    plt.ylabel('Number of Incidents')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'hate_crime_victims_by_party_histogram.png')
+    plt.show()
+
 if __name__ == "__main__":
-    victims_by_year()
-    victims_by_bias()
-    race_on_race()
-    victims_by_bias(2024)
-    race_on_race(2024)
+    #victims_by_year()
+    #victims_by_bias()
+    #race_on_race()
+    #victims_by_bias(2024)
+    #race_on_race(2024)
+    #victims_by_president_and_party()
+    histogram_by_presidential_term_colored_by_party()
 
     #TODO: histogram by date separated by transfer of power date of presidency (round to year, its close anyway)
+
+    #TODO: download population by race by year to do per capita
