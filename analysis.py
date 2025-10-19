@@ -237,32 +237,35 @@ def victims_by_presidential_terms():
     plt.savefig(OUTPUT_DIR + 'histogram_presidential_terms.png', dpi=300, bbox_inches='tight')
     plt.show()
 
-def boxplot_of_victims_per_crime():
+def boxplot_of_victims_per_crime(min_victims=12):
     df_clean = df.dropna(subset=['total_individual_victims'])
-    #keep only rows with 10 or more victims
-    df_clean = df_clean[df_clean['total_individual_victims'] > 9]
+    
     #split offense_name by MULTIPLE_SEP and explode to have one offense per row
-    df_expanded = df_clean.assign(offense_name=df['offense_name'].str.split(MULTIPLE_SEP)).explode('offense_name')
+    df_clean = df_clean.assign(offense_name=df['offense_name'].str.split(MULTIPLE_SEP)).explode('offense_name')
+    
+    #keep only rows with min_victims or more victims
+    df_clean = df_clean[df_clean['total_individual_victims'] >= min_victims]
+    
     #keep only selected offense names to avoid clutter
-    top_offenses = df_expanded['offense_name'].value_counts().nlargest(6).index
-    df_expanded = df_expanded[df_expanded['offense_name'].isin(top_offenses)]
+    top_offenses = df_clean['offense_name'].value_counts().nlargest(6).index
+    df_clean = df_clean[df_clean['offense_name'].isin(top_offenses)]
     
     plt.figure(figsize=(12, 8))
     
     # Create horizontal boxplot using matplotlib
-    offense_names = df_expanded['offense_name'].unique()
-    data_by_offense = [df_expanded[df_expanded['offense_name'] == offense]['total_individual_victims'].values 
+    offense_names = df_clean['offense_name'].unique()
+    data_by_offense = [df_clean[df_clean['offense_name'] == offense]['total_individual_victims'].values 
                       for offense in offense_names]
     
     # Create horizontal boxplot
-    box_plot = plt.boxplot(data_by_offense, vert=False, patch_artist=True, labels=offense_names)
+    box_plot = plt.boxplot(data_by_offense, vert=False, patch_artist=True, labels=offense_names, medianprops=dict(color='black'))
     
     # Color the boxes
     colors = ['lightblue', 'lightgreen', 'lightcoral', 'lightyellow', 'lightpink', 'lightgray']
     for patch, color in zip(box_plot['boxes'], colors[:len(box_plot['boxes'])]):
         patch.set_facecolor(color)
-    
-    plt.title('Number of Victims in Crimes with 10 or more Victims by Offense Name', fontsize=14)
+
+    plt.title(f'Number of Victims in Crimes with {min_victims} or more Victims by Offense Name', fontsize=14)
     plt.xlabel('Number of Victims')
     plt.ylabel('Offense Name')
     plt.xscale('log')  # Use logarithmic scale for better visibility
@@ -275,9 +278,9 @@ if __name__ == "__main__":
     #victims_by_year()
     #victims_by_bias()
     #victims_by_bias(2024)
-    race_on_race()
-    race_on_race(2024)
+    #race_on_race()
+    #race_on_race(2024)
     #victims_by_presidential_terms()
-    #boxplot_of_victims_per_crime()
+    boxplot_of_victims_per_crime()
 
     #TODO: download population by race by year to do per capita
