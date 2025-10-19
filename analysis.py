@@ -117,3 +117,5 @@ if __name__ == "__main__":
     victims_by_year()
     victims_by_bias()
     race_on_race()
+    victims_by_bias(2024)
+    race_on_race(2024)
