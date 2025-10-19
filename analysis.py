@@ -165,55 +165,66 @@ def race_on_race(year=None):
     plt.savefig(OUTPUT_DIR + f'hate_crime_offender_race_vs_victim{"_" + str(year) if year else ""}.png')
     plt.show()
 
-def victims_by_president_and_party():
-    crime_by_president = df.groupby('president')['total_individual_victims'].sum()
-    crime_by_party = df.groupby('party')['total_individual_victims'].sum()
-
-    plt.figure(figsize=(10, 6))
-    crime_by_president.plot(kind='bar', color='lightgreen')
-    plt.title('Total Hate Crime Victims by U.S. President')
-    plt.xlabel('President')
-    plt.ylabel('Total Victims')
-    plt.xticks(rotation=45)
+def victims_by_presidential_terms():
+    # removed bush sr because data starts in the middle of his term
+    presidential_bins = [1993, 1997, 2001, 2005, 2009, 2013, 2017, 2021, 2025]
+    
+    term_labels = [
+        '1993-1996\nClinton\n(Dem)', 
+        '1997-2000\nClinton\n(Dem)', 
+        '2001-2004\nBush Jr\n(Rep)',
+        '2005-2008\nBush Jr\n(Rep)',
+        '2009-2012\nObama\n(Dem)',
+        '2013-2016\nObama\n(Dem)',
+        '2017-2020\nTrump\n(Rep)',
+        '2021-2024\nBiden\n(Dem)'
+    ]
+    
+    # Create the histogram
+    plt.figure(figsize=(14, 8))
+    
+    # Filter out rows with missing victim data to avoid NaN issues
+    df_clean = df.dropna(subset=['total_individual_victims'])
+    
+    years = df_clean['data_year'].tolist()
+    weights = df_clean['total_individual_victims'].tolist()
+    n, bins, patches = plt.hist(years, bins=presidential_bins, weights=weights, 
+                               edgecolor='black', alpha=0.7)
+    
+    # Color patches by party
+    party_colors = ['red' if 'Rep' in label else 'blue' for label in term_labels]
+    for patch, color in zip(patches, party_colors):
+        patch.set_facecolor(color)
+    
+    plt.title('Distribution of Hate Crime Victims by Presidential Terms', fontsize=16)
+    plt.xlabel('Presidential Terms', fontsize=12)
+    plt.ylabel('Total Victims', fontsize=12)
+    
+    # Set x-tick positions to the center of each bin
+    bin_centers = [(presidential_bins[i] + presidential_bins[i+1]) / 2 for i in range(len(presidential_bins)-1)]
+    plt.xticks(bin_centers, term_labels, rotation=0, ha='center')
+    
+    # Add value labels on top of bars
+    for i, value in enumerate(n):
+        plt.text(bin_centers[i], value + max(n)*0.01, 
+                str(int(value)), ha='center', va='bottom', fontweight='bold')
+    
+    # Add legend
+    from matplotlib.patches import Patch
+    legend_elements = [Patch(facecolor='blue', alpha=0.7, label='Democrat'),
+                      Patch(facecolor='red', alpha=0.7, label='Republican')]
+    plt.legend(handles=legend_elements, loc='upper left')
+    
     plt.tight_layout()
-    plt.savefig(OUTPUT_DIR + 'hate_crime_victims_by_president.png')
-    plt.show()
-
-    plt.figure(figsize=(8, 6))
-    crime_by_party.plot(kind='bar', color='orange')
-    plt.title('Total Hate Crime Victims by Political Party')
-    plt.xlabel('Political Party')
-    plt.ylabel('Total Victims')
-    plt.xticks(rotation=0)
-    plt.tight_layout()
-    plt.savefig(OUTPUT_DIR + 'hate_crime_victims_by_party.png')
-    plt.show()
-
-def histogram_by_presidential_term_colored_by_party():
-    plt.figure(figsize=(12, 6))
-    for term_years_president_party, group in df.groupby(['president', 'party']):
-        president, party = term_years_president_party
-        plt.hist(group['data_year'], bins=range(df['data_year'].min(), df['data_year'].max() + 2), 
-                 alpha=0.5, label=f'{president} ({party})', color=((0, 0, 1) if party == 'Democrat' else (1, 0, 0)))
-
-    plt.title('Hate Crime Incidents Over Time by Presidential Party')
-    plt.xlabel('Year')
-    plt.xticks(range(df['data_year'].min(), df['data_year'].max() + 1))
-    plt.ylabel('Number of Incidents')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(OUTPUT_DIR + 'hate_crime_victims_by_party_histogram.png')
+    plt.savefig(OUTPUT_DIR + 'hate_crime_victims_by_presidential_terms_histogram.png', dpi=300, bbox_inches='tight')
     plt.show()
 
 if __name__ == "__main__":
-    #victims_by_year()
-    #victims_by_bias()
-    #race_on_race()
-    #victims_by_bias(2024)
-    #race_on_race(2024)
-    #victims_by_president_and_party()
-    histogram_by_presidential_term_colored_by_party()
-
-    #TODO: histogram by date separated by transfer of power date of presidency (round to year, its close anyway)
+    victims_by_year()
+    victims_by_bias()
+    race_on_race()
+    victims_by_bias(2024)
+    race_on_race(2024)
+    victims_by_presidential_terms()
 
     #TODO: download population by race by year to do per capita
