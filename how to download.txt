@@ -1,0 +1,3 @@
+https://cde.ucr.cjis.gov/LATEST/webapp/#/pages/downloads#datasets
+
+Quadro "Additional Datasets" -> Sanfona "Hate Crime" -> Botão "DOWNLOAD"
