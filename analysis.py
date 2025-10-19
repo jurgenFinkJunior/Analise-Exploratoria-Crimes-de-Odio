@@ -1,6 +1,10 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
+from matplotlib.colors import Normalize, LogNorm
+from matplotlib.cm import OrRd
+import geopandas as gpd
+import numpy as np
 
 OUTPUT_DIR = 'output/'
 MULTIPLE_SEP = ';'
@@ -13,6 +17,7 @@ columns_to_keep = [
     "incident_id", 
     "data_year", 
     "agency_type_name", 
+    "state_abbr",
     "state_name", 
     "division_name", 
     "region_name", 
@@ -274,6 +279,108 @@ def boxplot_of_victims_per_crime(min_victims=12):
     plt.savefig(OUTPUT_DIR + 'boxplot_victims_per_crime_horizontal.png', dpi=300, bbox_inches='tight')
     plt.show()
 
+def geomap_of_victims_by_state():
+    """Create a choropleth map of hate crime victims by state"""
+    try:
+        # Use a reliable, simple data source - US Census Bureau's Cartographic Boundary Files
+        # This is a stable URL that should work consistently
+        states_url = "https://www2.census.gov/geo/tiger/GENZ2018/shp/cb_2018_us_state_20m.zip"
+        
+        print("Loading US states geographic data...")
+        states = gpd.read_file(states_url)
+        
+        # Filter out territories, keep only continental US + Alaska + Hawaii
+        states = states[~states['STUSPS'].isin(['PR', 'VI', 'MP', 'GU', 'AS'])]
+        
+    except Exception as e:
+        print(f"Could not load Census data: {e}")
+        print("Trying alternative approach with state abbreviations...")
+        
+        # If Census data fails, create a simple approach without maps
+        # Just show the data in a bar chart format
+        victims_by_state = df.groupby('state_abbr')['total_individual_victims'].sum().sort_values(ascending=False)
+        
+        plt.figure(figsize=(15, 10))
+        victims_by_state.head(20).plot(kind='barh', color='darkred', alpha=0.7)
+        plt.title('Top 20 States by Hate Crime Victims', fontsize=16)
+        plt.xlabel('Total Victims')
+        plt.ylabel('State')
+        plt.tight_layout()
+        plt.savefig(OUTPUT_DIR + 'hate_crimes_by_state_bar.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        return
+    
+    # Aggregate victims by state
+    print("Aggregating hate crime data by state...")
+    victims_by_state = df.groupby('state_abbr')['total_individual_victims'].sum().reset_index()
+    victims_by_state.columns = ['state_abbr', 'total_victims']
+    
+    # Merge with geographic data using state abbreviations
+    print("Merging data with geographic boundaries...")
+    states = states.merge(victims_by_state, left_on='STUSPS', right_on='state_abbr', how='left')
+    states['total_victims'] = states['total_victims'].fillna(0)
+    
+    # Create the map
+    print("Creating choropleth map...")
+    fig, ax = plt.subplots(1, 1, figsize=(24, 16))
+    
+    # Prepare data for logarithmic scale (avoid log(0) by adding small value)
+    states['total_victims_log'] = states['total_victims'].replace(0, np.nan)
+    min_victims = states['total_victims_log'].min()
+    max_victims = states['total_victims_log'].max()
+    
+    # Use logarithmic normalization
+    norm = LogNorm(vmin=max(min_victims, 1), vmax=max_victims)
+    
+    # Plot the map with logarithmic normalization
+    states.plot(column='total_victims_log', 
+                cmap='OrRd', 
+                linewidth=0.8, 
+                ax=ax, 
+                edgecolor='black',
+                alpha=0.8,
+                norm=norm)
+    
+    # Create a colorbar with logarithmic scale
+    sm = plt.cm.ScalarMappable(cmap=OrRd, norm=norm)
+    sm.set_array([])    # Position the colorbar at the bottom
+    cbar = fig.colorbar(sm, ax=ax, orientation='horizontal', fraction=0.046, pad=0.08)
+    cbar.set_label('Total Hate Crime Victims (Log Scale)', fontsize=14, labelpad=10)
+    cbar.ax.tick_params(labelsize=12)
+    
+    # Add state labels (abbreviations)
+    for idx, row in states.iterrows():
+        if row['geometry'] is not None and row['total_victims'] > 0:
+            # Get the centroid for label placement
+            centroid = row['geometry'].centroid
+            ax.annotate(text=row['STUSPS'], 
+                       xy=(centroid.x, centroid.y),
+                       ha='center', va='center',
+                       fontsize=10, fontweight='bold',
+                       color='white', 
+                       bbox=dict(boxstyle="round,pad=0.2", facecolor='black', alpha=0.7))
+    
+    # Set the map extent to focus on continental US
+    ax.set_xlim(-130, -65)  # Longitude limits
+    ax.set_ylim(20, 50)     # Latitude limits
+    
+    ax.set_title('Hate Crime Victims by State (1991-2024)', fontsize=20, pad=30, fontweight='bold')
+    ax.axis('off')
+    
+    # Remove extra whitespace
+    plt.subplots_adjust(left=0.05, right=0.95, top=0.9, bottom=0.1)
+    plt.savefig(OUTPUT_DIR + 'geomap_victims_by_state.png', dpi=300, bbox_inches='tight', 
+                facecolor='white', edgecolor='none')
+    plt.show()
+    
+    # Also create a summary table
+    print("\nTop 10 states by total hate crime victims:")
+    top_states = victims_by_state.nlargest(10, 'total_victims')
+    for _, row in top_states.iterrows():
+        print(f"{row['state_abbr']}: {int(row['total_victims']):,} victims")
+    
+    print(f"\nMap saved as: {OUTPUT_DIR}geomap_victims_by_state.png")
+
 if __name__ == "__main__":
     #victims_by_year()
     #victims_by_bias()
@@ -281,6 +388,7 @@ if __name__ == "__main__":
     #race_on_race()
     #race_on_race(2024)
     #victims_by_presidential_terms()
-    boxplot_of_victims_per_crime()
+    #boxplot_of_victims_per_crime()
+    geomap_of_victims_by_state()
 
     #TODO: download population by race by year to do per capita
