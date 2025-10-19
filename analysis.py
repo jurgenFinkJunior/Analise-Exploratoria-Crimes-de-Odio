@@ -381,6 +381,114 @@ def geomap_of_victims_by_state():
     
     print(f"\nMap saved as: {OUTPUT_DIR}geomap_victims_by_state.png")
 
+def geomap_evolution_by_decade():
+    """Create a 4-panel subplot showing hate crime evolution across 1994, 2004, 2014, and 2024"""
+    try:
+        # Load US states shapefile
+        states_url = "https://www2.census.gov/geo/tiger/GENZ2018/shp/cb_2018_us_state_20m.zip"
+        print("Loading US states geographic data for evolution map...")
+        states_base = gpd.read_file(states_url)
+        states_base = states_base[~states_base['STUSPS'].isin(['PR', 'VI', 'MP', 'GU', 'AS'])]
+        
+    except Exception as e:
+        print(f"Could not load geographic data for evolution map: {e}")
+        return
+    
+    # Years to analyze
+    years = [1994, 2004, 2014, 2024]
+    
+    # Create figure with 2x2 subplots
+    fig, axes = plt.subplots(2, 2, figsize=(20, 16))
+    axes = axes.flatten()
+    
+    # State name to abbreviation mapping
+    state_name_to_abbr = {
+        'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR', 'California': 'CA',
+        'Colorado': 'CO', 'Connecticut': 'CT', 'Delaware': 'DE', 'Florida': 'FL', 'Georgia': 'GA',
+        'Hawaii': 'HI', 'Idaho': 'ID', 'Illinois': 'IL', 'Indiana': 'IN', 'Iowa': 'IA',
+        'Kansas': 'KS', 'Kentucky': 'KY', 'Louisiana': 'LA', 'Maine': 'ME', 'Maryland': 'MD',
+        'Massachusetts': 'MA', 'Michigan': 'MI', 'Minnesota': 'MN', 'Mississippi': 'MS', 'Missouri': 'MO',
+        'Montana': 'MT', 'Nebraska': 'NE', 'Nevada': 'NV', 'New Hampshire': 'NH', 'New Jersey': 'NJ',
+        'New Mexico': 'NM', 'New York': 'NY', 'North Carolina': 'NC', 'North Dakota': 'ND', 'Ohio': 'OH',
+        'Oklahoma': 'OK', 'Oregon': 'OR', 'Pennsylvania': 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC',
+        'South Dakota': 'SD', 'Tennessee': 'TN', 'Texas': 'TX', 'Utah': 'UT', 'Vermont': 'VT',
+        'Virginia': 'VA', 'Washington': 'WA', 'West Virginia': 'WV', 'Wisconsin': 'WI', 'Wyoming': 'WY',
+        'District of Columbia': 'DC'
+    }
+    
+    # Calculate global min/max for consistent color scale across all years
+    all_year_data = []
+    for year in years:
+        year_data = df[df['data_year'] == year].groupby('state_abbr')['total_individual_victims'].sum()
+        all_year_data.extend(year_data.values)
+    
+    global_min = max(1, min([x for x in all_year_data if x > 0]))  # Avoid log(0)
+    global_max = max(all_year_data)
+    norm = LogNorm(vmin=global_min, vmax=global_max)
+    
+    for i, year in enumerate(years):
+        ax = axes[i]
+        
+        # Filter data for the specific year
+        year_df = df[df['data_year'] == year]
+        victims_by_state = year_df.groupby('state_abbr')['total_individual_victims'].sum().reset_index()
+        victims_by_state.columns = ['state_abbr', 'total_victims']
+        
+        # Create a copy of the base states geodataframe
+        states = states_base.copy()
+        
+        # Merge with year-specific data
+        states = states.merge(victims_by_state, left_on='STUSPS', right_on='state_abbr', how='left')
+        states['total_victims'] = states['total_victims'].fillna(0)
+        states['total_victims_log'] = states['total_victims'].replace(0, np.nan)
+        
+        # Plot the map
+        states.plot(column='total_victims_log', 
+                   cmap='OrRd', 
+                   linewidth=0.5, 
+                   ax=ax, 
+                   edgecolor='black',
+                   alpha=0.8,
+                   norm=norm,
+                   missing_kwds={"color": "lightgrey", "alpha": 0.5})
+        
+        # Set map extent to focus on continental US
+        ax.set_xlim(-130, -65)
+        ax.set_ylim(20, 50)
+        
+        # Add title for each subplot
+        total_victims = victims_by_state['total_victims'].sum()
+        ax.set_title(f'{year}\nTotal Victims: {int(total_victims):,}', 
+                    fontsize=16, fontweight='bold', pad=15)
+        ax.axis('off')
+    
+    # Add a single colorbar for all subplots
+    sm = plt.cm.ScalarMappable(cmap=OrRd, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axes, orientation='horizontal', 
+                       fraction=0.05, pad=0.08, shrink=0.8)
+    cbar.set_label('Total Hate Crime Victims (Log Scale)', fontsize=14, labelpad=10)
+    cbar.ax.tick_params(labelsize=12)
+    
+    # Overall title
+    fig.suptitle('Evolution of Hate Crime Victims by State\n1994 • 2004 • 2014 • 2024', 
+                fontsize=20, fontweight='bold', y=0.95)
+    
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.88, bottom=0.12)
+    plt.savefig(OUTPUT_DIR + 'geomap_evolution_by_decade.png', dpi=300, bbox_inches='tight',
+                facecolor='white', edgecolor='none')
+    plt.show()
+    
+    # Print summary statistics
+    print("\nHate Crime Evolution Summary:")
+    print("-" * 40)
+    for year in years:
+        year_total = df[df['data_year'] == year]['total_individual_victims'].sum()
+        print(f"{year}: {int(year_total):,} total victims")
+    
+    print(f"\nEvolution map saved as: {OUTPUT_DIR}geomap_evolution_by_decade.png")
+
 if __name__ == "__main__":
     #victims_by_year()
     #victims_by_bias()
@@ -389,6 +497,5 @@ if __name__ == "__main__":
     #race_on_race(2024)
     #victims_by_presidential_terms()
     #boxplot_of_victims_per_crime()
-    geomap_of_victims_by_state()
-
-    #TODO: download population by race by year to do per capita
+    #geomap_of_victims_by_state()
+    geomap_evolution_by_decade()
