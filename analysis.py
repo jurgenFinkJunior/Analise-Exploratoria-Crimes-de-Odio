@@ -1,5 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 
 OUTPUT_DIR = 'output/'
 MULTIPLE_SEP = ';'
@@ -90,10 +91,10 @@ print("Distinct Offender Race Counts:")
 print(df['offender_race'].value_counts())
 
 print("Distinct Bias Counts:")
-df_expl = df.assign(bias_desc=df['bias_desc'].str.split(MULTIPLE_SEP)).explode('bias_desc')
+df_bias = df.assign(bias_desc=df['bias_desc'].str.split(MULTIPLE_SEP)).explode('bias_desc')
 #keep only the ones with more than one occurrence to remove strange values with typos and such
-df_expl = df_expl[df_expl['bias_desc'].map(df_expl['bias_desc'].value_counts()) > 1]
-print(df_expl['bias_desc'].value_counts())
+df_bias = df_bias[df_bias['bias_desc'].map(df_bias['bias_desc'].value_counts()) > 1]
+print(df_bias['bias_desc'].value_counts())
 
 def victims_by_year():
     crime_by_year = df.groupby('data_year')['total_individual_victims'].sum()
@@ -104,7 +105,7 @@ def victims_by_year():
     plt.ylabel('Total Victims')
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.savefig(OUTPUT_DIR + 'hate_crime_victims_by_year.png')
+    plt.savefig(OUTPUT_DIR + 'bar_victims_by_year.png')
     plt.show()
 
 def victims_by_bias(year=None):
@@ -122,7 +123,7 @@ def victims_by_bias(year=None):
     plt.ylabel('Bias Description')
     #plt.xticks(rotation=90)
     plt.tight_layout()
-    plt.savefig(OUTPUT_DIR + f'hate_crime_victims_by_bias{"_" + str(year) if year else ""}.png')
+    plt.savefig(OUTPUT_DIR + f'barh_victims_by_bias{"_" + str(year) if year else ""}.png')
     plt.show()
 
 def race_on_race(year=None):
@@ -131,8 +132,11 @@ def race_on_race(year=None):
         df_year = df[df['data_year'] == year]
 
     #filter by bias to include only racial related hate crimes
-    racial_biases = ['Anti-Black or African American', 'Anti-White', 'Anti-Asian', 
-                      'Anti-Native Hawaiian or Other Pacific Islander', 'Anti-American Indian or Alaska Native',]
+    racial_biases = [
+        'Anti-Black or African American', 'Anti-White', 'Anti-Asian', 
+        'Anti-Native Hawaiian or Other Pacific Islander', 'Anti-American Indian or Alaska Native',
+        'Anti-Hispanic or Latino', 'Anti-Arab', 'Anti-Other Race/Ethnicity/Ancestry'
+    ]
     df_race = df_year[df_year['bias_desc'].isin(racial_biases)]
 
     #filter to remove where offender race is not valid
@@ -146,6 +150,9 @@ def race_on_race(year=None):
         'Anti-Asian': 'Asian',
         'Anti-Native Hawaiian or Other Pacific Islander': 'Native Hawaiian or Other Pacific Islander',
         'Anti-American Indian or Alaska Native': 'American Indian or Alaska Native',
+        'Anti-Hispanic or Latino': 'Hispanic or Latino',
+        'Anti-Arab': 'Arab',
+        'Anti-Other Race/Ethnicity/Ancestry': 'Other Race/Ethnicity/Ancestry'
     }
     df_race = df_race.replace({'bias_desc': bias_to_victim_race})
 
@@ -154,16 +161,18 @@ def race_on_race(year=None):
 
     #create crosstab and order rows and columns consistently
     race_crosstab = pd.crosstab(df_race['offender_race'], df_race['bias_desc'])
-    
-    #define consistent race order for both rows and columns
-    race_order = ['White', 'Black or African American', 'Asian', 
-                  'American Indian or Alaska Native', 'Native Hawaiian or Other Pacific Islander']
-    
+
+    lines = ['White', 'Black or African American', 'Asian', 
+             'American Indian or Alaska Native', 'Native Hawaiian or Other Pacific Islander']
+    columns = ['White', 'Black or African American', 'Asian', 
+               'American Indian or Alaska Native', 'Native Hawaiian or Other Pacific Islander',
+               'Hispanic or Latino', 'Arab', 'Other Race/Ethnicity/Ancestry']
+
     #reindex both rows and columns to have the same order, but reversed
-    race_crosstab = race_crosstab.reindex(index=race_order[::-1], columns=race_order, fill_value=0)
-    
+    race_crosstab = race_crosstab.reindex(index=lines[::-1], columns=columns, fill_value=0)
+
     plt.figure(figsize=(12, 8))
-    plt.imshow(race_crosstab, cmap='viridis', aspect='auto')
+    plt.imshow(race_crosstab, cmap='viridis', aspect='auto', norm=LogNorm())
     plt.colorbar(label='Number of Victims')
     plt.xticks(ticks=range(len(race_crosstab.columns)), labels=race_crosstab.columns, rotation=45, ha='right')
     plt.yticks(ticks=range(len(race_crosstab.index)), labels=race_crosstab.index)
@@ -171,7 +180,7 @@ def race_on_race(year=None):
     plt.xlabel('Victim Race')
     plt.ylabel('Offender Race')
     plt.tight_layout()
-    plt.savefig(OUTPUT_DIR + f'hate_crime_offender_race_vs_victim{"_" + str(year) if year else ""}.png')
+    plt.savefig(OUTPUT_DIR + f'heatmap_offender_race_vs_victim{"_" + str(year) if year else ""}.png')
     plt.show()
 
 def victims_by_presidential_terms():
@@ -225,7 +234,7 @@ def victims_by_presidential_terms():
     plt.legend(handles=legend_elements, loc='upper left')
     
     plt.tight_layout()
-    plt.savefig(OUTPUT_DIR + 'hate_crime_victims_by_presidential_terms_histogram.png', dpi=300, bbox_inches='tight')
+    plt.savefig(OUTPUT_DIR + 'histogram_presidential_terms.png', dpi=300, bbox_inches='tight')
     plt.show()
 
 def boxplot_of_victims_per_crime():
@@ -265,10 +274,10 @@ def boxplot_of_victims_per_crime():
 if __name__ == "__main__":
     #victims_by_year()
     #victims_by_bias()
-    #race_on_race()
     #victims_by_bias(2024)
-    #race_on_race(2024)
+    race_on_race()
+    race_on_race(2024)
     #victims_by_presidential_terms()
-    boxplot_of_victims_per_crime()
+    #boxplot_of_victims_per_crime()
 
     #TODO: download population by race by year to do per capita
