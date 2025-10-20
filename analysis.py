@@ -7,6 +7,9 @@ from matplotlib.cm import OrRd
 from matplotlib.patches import Patch
 import geopandas as gpd
 import numpy as np
+from scipy.stats import chi2_contingency, chi2, f_oneway, kruskal, levene, shapiro, tukey_hsd
+from scipy import stats
+import warnings
 
 OUTPUT_DIR = 'output/'
 MULTIPLE_SEP = ';'
@@ -102,6 +105,27 @@ df_bias = df.assign(bias_desc=df['bias_desc'].str.split(MULTIPLE_SEP)).explode('
 #keep only the ones with more than one occurrence to remove strange values with typos and such
 df_bias = df_bias[df_bias['bias_desc'].map(df_bias['bias_desc'].value_counts()) > 1]
 print(df_bias['bias_desc'].value_counts())
+
+def prepare_regional_data(df):
+    """Helper function to prepare regional data for statistical testing"""
+    # Define US Census regions
+    northeast = ['CT', 'ME', 'MA', 'NH', 'NJ', 'NY', 'PA', 'RI', 'VT']
+    midwest = ['IL', 'IN', 'IA', 'KS', 'MI', 'MN', 'MO', 'NE', 'ND', 'OH', 'SD', 'WI']
+    south = ['AL', 'AR', 'DE', 'FL', 'GA', 'KY', 'LA', 'MD', 'MS', 'NC', 'OK', 'SC', 'TN', 'TX', 'VA', 'WV']
+    west = ['AK', 'AZ', 'CA', 'CO', 'HI', 'ID', 'MT', 'NV', 'NM', 'OR', 'UT', 'WA', 'WY']
+    
+    def assign_region(state):
+        if state in northeast: return 'Northeast'
+        elif state in midwest: return 'Midwest'  
+        elif state in south: return 'South'
+        elif state in west: return 'West'
+        else: return 'Unknown'
+    
+    df_regional = df.copy()
+    df_regional['region'] = df_regional['state_abbr'].apply(assign_region)
+    df_regional = df_regional[df_regional['region'] != 'Unknown']
+    
+    return df_regional
 
 def victims_by_year():
     crime_by_year = df.groupby('data_year')['total_individual_victims'].sum()
@@ -275,6 +299,19 @@ def boxplot_of_victims_per_crime(min_victims=12):
     plt.xlabel('Number of Victims')
     plt.ylabel('Offense Name')
     plt.xscale('log')  # Use logarithmic scale for better visibility
+    
+    # Set custom x-axis ticks to show more values including minimum
+    # Get the actual data range to set appropriate ticks
+    all_values = [val for data in data_by_offense for val in data]
+    min_val = min(all_values)
+    max_val = max(all_values)
+    
+    # Create custom tick marks that include key values
+    custom_ticks = [min_val, 20, 50, 100, 200, 500, 1000]
+    # Only keep ticks that are within our data range
+    custom_ticks = [tick for tick in custom_ticks if min_val <= tick <= max_val * 1.1]
+    
+    plt.xticks(custom_ticks, [str(int(tick)) for tick in custom_ticks])
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(OUTPUT_DIR + 'boxplot_victims_per_crime_horizontal.png', dpi=300, bbox_inches='tight')
@@ -833,19 +870,498 @@ def hate_crime_story_timeline():
     plt.savefig(OUTPUT_DIR + 'hate_crime_story_timeline.png', dpi=300, bbox_inches='tight')
     plt.show()
 
+def chi_square_regional_test(df):
+    """
+    Performs chi-square test for independence between regions and bias types
+    """
+    # Prepare data with regions
+    df_expanded = df.assign(bias_desc=df['bias_desc'].str.split(';')).explode('bias_desc')
+    df_regional = prepare_regional_data(df_expanded)
+    
+    # Select major bias categories for cleaner analysis
+    major_biases = ['Anti-Black or African American', 'Anti-White', 'Anti-Jewish', 
+                   'Anti-Islamic (Muslim)', 'Anti-Hispanic or Latino', 
+                   'Anti-Gay (Male)', 'Anti-Lesbian, Gay, Bisexual, or Transgender (Mixed Group)']
+    
+    df_filtered = df_regional[df_regional['bias_desc'].isin(major_biases)]
+    
+    # Create contingency table
+    contingency_table = pd.crosstab(df_filtered['region'], 
+                                   df_filtered['bias_desc'], 
+                                   values=df_filtered['total_individual_victims'],
+                                   aggfunc='sum').fillna(0)
+    
+    # Perform chi-square test
+    chi2_stat, p_value, dof, expected = chi2_contingency(contingency_table)
+    
+    # Calculate effect size (Cramér's V)
+    n = contingency_table.sum().sum()
+    cramers_v = np.sqrt(chi2_stat / (n * (min(contingency_table.shape) - 1)))
+    
+    # Interpretation
+    alpha = 0.05
+    significant = p_value < alpha
+    
+    # Effect size interpretation
+    if cramers_v < 0.1:
+        effect = "negligible"
+    elif cramers_v < 0.3:
+        effect = "small"
+    elif cramers_v < 0.5:
+        effect = "medium"
+    else:
+        effect = "large"
+    
+    return {
+        'test_name': 'Chi-Square Test of Independence',
+        'contingency_table': contingency_table,
+        'chi2_stat': chi2_stat,
+        'p_value': p_value,
+        'dof': dof,
+        'cramers_v': cramers_v,
+        'significant': significant,
+        'effect_size': effect,
+        'alpha': alpha,
+        'expected': expected
+    }
+
+def anova_regional_test(df):
+    """
+    Performs ANOVA to test for regional differences in hate crime rates
+    """
+    # Prepare regional data
+    regional_data = prepare_regional_data(df)
+    
+    # Calculate annual rates by region
+    regional_rates = []
+    region_labels = []
+    region_stats = {}
+    
+    for region in ['Northeast', 'Midwest', 'South', 'West']:
+        region_df = regional_data[regional_data['region'] == region]
+        annual_rates = region_df.groupby('data_year')['total_individual_victims'].sum()
+        regional_rates.append(annual_rates.values)
+        region_labels.append(region)
+        region_stats[region] = {
+            'mean': annual_rates.mean(),
+            'std': annual_rates.std(),
+            'count': len(annual_rates)
+        }
+    
+    # Test assumptions
+    # 1. Test for equal variances (Levene's test)
+    levene_stat, levene_p = levene(*regional_rates)
+    equal_variances = levene_p >= 0.05
+    
+    # 2. Test for normality (Shapiro-Wilk for each group)
+    normality_tests = {}
+    all_normal = True
+    for i, (rates, label) in enumerate(zip(regional_rates, region_labels)):
+        if len(rates) >= 3:  # Minimum for Shapiro-Wilk
+            shapiro_stat, shapiro_p = shapiro(rates)
+            is_normal = shapiro_p > 0.05
+            normality_tests[label] = {'stat': shapiro_stat, 'p_value': shapiro_p, 'normal': is_normal}
+            if not is_normal:
+                all_normal = False
+    
+    # Perform appropriate test
+    if all_normal and equal_variances:
+        # Standard one-way ANOVA
+        f_stat, p_value = f_oneway(*regional_rates)
+        test_name = "One-way ANOVA"
+    else:
+        # Non-parametric alternative: Kruskal-Wallis
+        f_stat, p_value = kruskal(*regional_rates)
+        test_name = "Kruskal-Wallis (non-parametric)"
+    
+    # Interpretation
+    alpha = 0.05
+    significant = p_value < alpha
+    
+    return {
+        'test_name': test_name,
+        'f_stat': f_stat,
+        'p_value': p_value,
+        'significant': significant,
+        'alpha': alpha,
+        'region_stats': region_stats,
+        'levene_stat': levene_stat,
+        'levene_p': levene_p,
+        'equal_variances': equal_variances,
+        'normality_tests': normality_tests,
+        'all_normal': all_normal,
+        'regional_rates': regional_rates,
+        'region_labels': region_labels
+    }
+
+def permutation_test_regions(df, n_permutations=10000):
+    """
+    Performs permutation test for regional differences
+    """
+    # Prepare data
+    regional_data = prepare_regional_data(df)
+    
+    # Calculate observed differences
+    region_means = {}
+    for region in ['Northeast', 'Midwest', 'South', 'West']:
+        region_df = regional_data[regional_data['region'] == region]
+        annual_totals = region_df.groupby('data_year')['total_individual_victims'].sum()
+        region_means[region] = annual_totals.mean()
+    
+    # Calculate observed test statistic (variance of means)
+    observed_stat = np.var(list(region_means.values()))
+    
+    # Get all annual totals by region
+    annual_regional = regional_data.groupby(['data_year', 'region'])['total_individual_victims'].sum().reset_index()
+    all_annual_totals = []
+    for year in annual_regional['data_year'].unique():
+        year_data = annual_regional[annual_regional['data_year'] == year]
+        if len(year_data) == 4:  # All 4 regions have data
+            all_annual_totals.append(year_data['total_individual_victims'].values)
+    
+    # Permutation procedure
+    permuted_stats = []
+    np.random.seed(42)  # For reproducibility
+    
+    for _ in range(n_permutations):
+        # Randomly shuffle region assignments for each year
+        permuted_means = []
+        for year_totals in all_annual_totals:
+            shuffled = year_totals.copy()
+            np.random.shuffle(shuffled)
+            permuted_means.extend(shuffled)
+        
+        # Calculate permuted test statistic
+        if len(permuted_means) >= 4:
+            # Reshape to get means for each region across years
+            n_years = len(all_annual_totals)
+            region_means_perm = [np.mean(permuted_means[i::4]) for i in range(4)]
+            permuted_stat = np.var(region_means_perm)
+            permuted_stats.append(permuted_stat)
+    
+    # Calculate p-value
+    permuted_stats = np.array(permuted_stats)
+    p_value = np.mean(permuted_stats >= observed_stat) if len(permuted_stats) > 0 else 1.0
+    
+    # Interpretation
+    alpha = 0.05
+    significant = p_value < alpha
+    
+    return {
+        'test_name': 'Permutation Test',
+        'observed_stat': observed_stat,
+        'p_value': p_value,
+        'significant': significant,
+        'alpha': alpha,
+        'n_permutations': n_permutations,
+        'permuted_stats': permuted_stats,
+        'region_means': region_means
+    }
+
+def bayesian_regional_analysis(df):
+    """
+    Bayesian approach to regional differences using bootstrap confidence intervals
+    """
+    # Prepare data
+    regional_data = prepare_regional_data(df)
+    
+    # Bootstrap confidence intervals for each region
+    def bootstrap_mean(data, n_bootstrap=10000, confidence=0.95):
+        """Calculate bootstrap confidence interval for mean"""
+        bootstrap_means = []
+        np.random.seed(42)
+        
+        for _ in range(n_bootstrap):
+            sample = np.random.choice(data, size=len(data), replace=True)
+            bootstrap_means.append(np.mean(sample))
+        
+        alpha = 1 - confidence
+        lower = np.percentile(bootstrap_means, 100 * alpha/2)
+        upper = np.percentile(bootstrap_means, 100 * (1 - alpha/2))
+        
+        return np.mean(bootstrap_means), lower, upper, np.array(bootstrap_means)
+    
+    # Calculate bootstrap CIs for each region
+    regional_results = {}
+    for region in ['Northeast', 'Midwest', 'South', 'West']:
+        region_df = regional_data[regional_data['region'] == region]
+        annual_totals = region_df.groupby('data_year')['total_individual_victims'].sum()
+        
+        mean_est, ci_lower, ci_upper, bootstrap_dist = bootstrap_mean(annual_totals.values)
+        
+        regional_results[region] = {
+            'mean': mean_est,
+            'ci_lower': ci_lower,
+            'ci_upper': ci_upper,
+            'ci_width': ci_upper - ci_lower,
+            'bootstrap_dist': bootstrap_dist
+        }
+    
+    # Probability comparisons
+    pairwise_comparisons = {}
+    regions = list(regional_results.keys())
+    for i in range(len(regions)):
+        for j in range(i+1, len(regions)):
+            region1, region2 = regions[i], regions[j]
+            
+            # Calculate probability that region1 > region2
+            dist1 = regional_results[region1]['bootstrap_dist']
+            dist2 = regional_results[region2]['bootstrap_dist']
+            
+            prob_greater = np.mean(dist1 > dist2)
+            
+            # Practical significance threshold
+            threshold = 50  # Consider differences > 50 victims practically significant
+            practical_prob = np.mean(np.abs(dist1 - dist2) > threshold)
+            
+            pairwise_comparisons[f"{region1}_vs_{region2}"] = {
+                'prob_greater': prob_greater,
+                'practical_prob': practical_prob,
+                'threshold': threshold
+            }
+    
+    return {
+        'test_name': 'Bayesian Bootstrap Analysis',
+        'regional_results': regional_results,
+        'pairwise_comparisons': pairwise_comparisons
+    }
+
+def comprehensive_regional_testing(df):
+    """
+    Runs all statistical tests for regional differences and returns unified results
+    """
+    print("Running comprehensive regional statistical testing...")
+    
+    # 1. Chi-square test for bias type distribution
+    chi2_results = chi_square_regional_test(df)
+    
+    # 2. ANOVA for mean differences
+    anova_results = anova_regional_test(df)
+    
+    # 3. Permutation test
+    perm_results = permutation_test_regions(df)
+    
+    # 4. Bayesian analysis
+    bayesian_results = bayesian_regional_analysis(df)
+    
+    # Count significant tests
+    significant_tests = sum([
+        chi2_results['significant'],
+        anova_results['significant'], 
+        perm_results['significant']
+    ])
+    
+    # Overall conclusion
+    if significant_tests >= 2:
+        overall_conclusion = "STRONG EVIDENCE of regional differences"
+    elif significant_tests == 1:
+        overall_conclusion = "MODERATE EVIDENCE of regional differences"
+    else:
+        overall_conclusion = "NO STRONG EVIDENCE of regional differences"
+    
+    return {
+        'chi2_results': chi2_results,
+        'anova_results': anova_results,
+        'permutation_results': perm_results,
+        'bayesian_results': bayesian_results,
+        'significant_tests': significant_tests,
+        'total_tests': 3,
+        'overall_conclusion': overall_conclusion
+    }
+
+def export_statistical_results(results, filename='statistical_analysis_results.txt'):
+    """
+    Exports all statistical test results to a text file with explanations
+    """
+    with open(filename, 'w') as f:
+        f.write("="*80 + "\n")
+        f.write("COMPREHENSIVE STATISTICAL ANALYSIS OF REGIONAL HATE CRIME DIFFERENCES\n")
+        f.write("="*80 + "\n\n")
+        
+        f.write("OVERVIEW:\n")
+        f.write("This analysis tests whether hate crime patterns differ significantly across\n")
+        f.write("US Census regions (Northeast, Midwest, South, West) using multiple statistical\n")
+        f.write("approaches to provide robust evidence.\n\n")
+        
+        # Chi-square test results
+        chi2 = results['chi2_results']
+        f.write("1. CHI-SQUARE TEST OF INDEPENDENCE\n")
+        f.write("-" * 50 + "\n")
+        f.write("Purpose: Tests whether bias type distribution varies across regions\n")
+        f.write("Null Hypothesis: Bias type distribution is independent of region\n")
+        f.write("Alternative Hypothesis: Bias type distribution depends on region\n\n")
+        
+        f.write("Results:\n")
+        f.write(f"Chi-square statistic: {chi2['chi2_stat']:.4f}\n")
+        f.write(f"p-value: {chi2['p_value']:.2e}\n")
+        f.write(f"Degrees of freedom: {chi2['dof']}\n")
+        f.write(f"Cramér's V (effect size): {chi2['cramers_v']:.4f}\n")
+        f.write(f"Effect size interpretation: {chi2['effect_size']}\n\n")
+        
+        if chi2['significant']:
+            f.write(f"✓ SIGNIFICANT: Regional differences in bias types are statistically significant (p < {chi2['alpha']})\n")
+            f.write("This means that different types of hate crimes occur at different rates across regions.\n")
+        else:
+            f.write(f"✗ NOT SIGNIFICANT: No statistically significant regional differences detected (p ≥ {chi2['alpha']})\n")
+            f.write("This suggests bias types are distributed similarly across regions.\n")
+        
+        f.write("\nInterpretation: Cramér's V measures effect size where 0.1=small, 0.3=medium, 0.5=large effect.\n")
+        f.write("A significant result indicates that knowing the region provides information about bias types.\n\n")
+        
+        # ANOVA results
+        anova = results['anova_results']
+        f.write("2. ANALYSIS OF VARIANCE (ANOVA)\n")
+        f.write("-" * 50 + "\n")
+        f.write("Purpose: Tests whether mean hate crime rates differ across regions\n")
+        f.write("Null Hypothesis: All regions have equal mean hate crime rates\n")
+        f.write("Alternative Hypothesis: At least one region has a different mean rate\n\n")
+        
+        f.write("Regional Statistics:\n")
+        for region, stats in anova['region_stats'].items():
+            f.write(f"{region}: Mean = {stats['mean']:.1f}, Std = {stats['std']:.1f}, N = {stats['count']}\n")
+        f.write("\n")
+        
+        f.write("Assumption Testing:\n")
+        f.write(f"Equal variances (Levene's test): p = {anova['levene_p']:.4f} ")
+        f.write("✓ Met\n" if anova['equal_variances'] else "✗ Violated\n")
+        
+        f.write("Normality tests (Shapiro-Wilk):\n")
+        for region, test in anova['normality_tests'].items():
+            f.write(f"  {region}: p = {test['p_value']:.4f} ")
+            f.write("✓ Normal\n" if test['normal'] else "✗ Non-normal\n")
+        f.write("\n")
+        
+        f.write("Results:\n")
+        f.write(f"Test used: {anova['test_name']}\n")
+        f.write(f"Test statistic: {anova['f_stat']:.4f}\n")
+        f.write(f"p-value: {anova['p_value']:.4f}\n\n")
+        
+        if anova['significant']:
+            f.write(f"✓ SIGNIFICANT: Regional differences in mean rates are statistically significant (p < {anova['alpha']})\n")
+            f.write("This means at least one region has a significantly different average hate crime rate.\n")
+            f.write("Post-hoc analysis would be needed to identify which specific regions differ.\n")
+        else:
+            f.write(f"✗ NOT SIGNIFICANT: No statistically significant regional differences detected (p ≥ {anova['alpha']})\n")
+            f.write("This suggests all regions have similar average hate crime rates.\n")
+        
+        f.write("\nInterpretation: ANOVA tests whether group means differ more than expected by chance.\n")
+        f.write("If assumptions are violated, Kruskal-Wallis (non-parametric) test is used instead.\n\n")
+        
+        # Permutation test results
+        perm = results['permutation_results']
+        f.write("3. PERMUTATION TEST\n")
+        f.write("-" * 50 + "\n")
+        f.write("Purpose: Non-parametric test that doesn't assume specific distributions\n")
+        f.write("Null Hypothesis: Observed regional differences could occur by random chance\n")
+        f.write("Alternative Hypothesis: Regional differences are too large to be due to chance\n\n")
+        
+        f.write("Observed Regional Means:\n")
+        for region, mean in perm['region_means'].items():
+            f.write(f"{region}: {mean:.2f}\n")
+        f.write("\n")
+        
+        f.write("Results:\n")
+        f.write(f"Observed test statistic (variance of means): {perm['observed_stat']:.4f}\n")
+        f.write(f"Number of permutations: {perm['n_permutations']:,}\n")
+        f.write(f"p-value: {perm['p_value']:.4f}\n\n")
+        
+        if perm['significant']:
+            f.write(f"✓ SIGNIFICANT: Regional differences are statistically significant (p < {perm['alpha']})\n")
+            f.write("The observed regional differences are larger than would be expected by random chance.\n")
+        else:
+            f.write(f"✗ NOT SIGNIFICANT: No statistically significant regional differences detected (p ≥ {perm['alpha']})\n")
+            f.write("The observed regional differences could reasonably occur by random chance.\n")
+        
+        f.write("\nInterpretation: Permutation tests are 'exact' - they don't rely on distributional assumptions.\n")
+        f.write("They create a null distribution by randomly reassigning data and comparing to observed results.\n\n")
+        
+        # Bayesian results
+        bayesian = results['bayesian_results']
+        f.write("4. BAYESIAN BOOTSTRAP ANALYSIS\n")
+        f.write("-" * 50 + "\n")
+        f.write("Purpose: Provides probability distributions and confidence intervals for regional means\n")
+        f.write("Approach: Uses bootstrap resampling to estimate uncertainty in regional means\n\n")
+        
+        f.write("Regional Estimates (95% Confidence Intervals):\n")
+        for region, est in bayesian['regional_results'].items():
+            f.write(f"{region}: {est['mean']:.2f} [{est['ci_lower']:.2f}, {est['ci_upper']:.2f}] (width: {est['ci_width']:.2f})\n")
+        f.write("\n")
+        
+        f.write("Pairwise Probability Comparisons:\n")
+        for comparison, probs in bayesian['pairwise_comparisons'].items():
+            regions = comparison.replace('_vs_', ' vs ')
+            f.write(f"{regions}:\n")
+            f.write(f"  Probability first region > second: {probs['prob_greater']:.3f}\n")
+            f.write(f"  Probability of practical difference (>{probs['threshold']} victims): {probs['practical_prob']:.3f}\n")
+        f.write("\n")
+        
+        f.write("Interpretation: Bootstrap confidence intervals show the range of plausible values.\n")
+        f.write("Narrow intervals indicate more precise estimates. Probability comparisons show\n")
+        f.write("the likelihood that one region truly has higher rates than another.\n\n")
+        
+        # Overall summary
+        f.write("="*80 + "\n")
+        f.write("SUMMARY AND CONCLUSIONS\n")
+        f.write("="*80 + "\n\n")
+        
+        f.write("Test Results Summary:\n")
+        f.write(f"Chi-square test (bias distribution): {'SIGNIFICANT' if chi2['significant'] else 'NOT SIGNIFICANT'} (p = {chi2['p_value']:.4f})\n")
+        f.write(f"ANOVA (mean differences): {'SIGNIFICANT' if anova['significant'] else 'NOT SIGNIFICANT'} (p = {anova['p_value']:.4f})\n")
+        f.write(f"Permutation test: {'SIGNIFICANT' if perm['significant'] else 'NOT SIGNIFICANT'} (p = {perm['p_value']:.4f})\n\n")
+        
+        f.write(f"Significant tests: {results['significant_tests']}/{results['total_tests']}\n")
+        f.write(f"Overall conclusion: {results['overall_conclusion']}\n\n")
+        
+        if results['significant_tests'] > 0:
+            f.write("RECOMMENDATIONS:\n")
+            f.write("• Investigate practical significance and effect sizes\n")
+            f.write("• Consider regional factors (demographics, policies, reporting practices)\n")
+            f.write("• Adjust for population differences in follow-up analysis\n")
+            f.write("• Examine specific bias types showing regional variation\n")
+            f.write("• Consider temporal changes in regional patterns\n\n")
+        else:
+            f.write("RECOMMENDATIONS:\n")
+            f.write("• Consider pooling regions for analysis to increase statistical power\n")
+            f.write("• Look for other grouping variables (urban/rural, state-level policies)\n")
+            f.write("• Check for temporal changes in regional patterns\n")
+            f.write("• Focus on national-level trends and patterns\n\n")
+        
+        f.write("IMPORTANT NOTES:\n")
+        f.write("• Statistical significance ≠ practical importance\n")
+        f.write("• Multiple tests increase the chance of false positives\n")
+        f.write("• Consider adjusting significance levels for multiple testing\n")
+        f.write("• Effect sizes provide information about practical significance\n")
+        f.write("• Regional differences may be due to reporting practices, not just crime rates\n")
+        f.write("• Population adjustments should be considered in future analyses\n")
+
 if __name__ == "__main__":
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    victims_by_year()
-    victims_by_bias()
-    victims_by_bias(2024)
+    #victims_by_year()
+    #victims_by_bias()
+    #victims_by_bias(2024)
     #race_on_race()
     #race_on_race(2024)
-    victims_by_presidential_terms()
-    boxplot_of_victims_per_crime()
-    geomap_of_victims_by_state()
-    geomap_evolution_by_decade()
-    bias_trends_over_time()
-    hate_crime_seasonality_heatmap()
-    regional_radar_comparison()
-    offender_victim_flow_analysis()
-    hate_crime_story_timeline()
+    #victims_by_presidential_terms()
+    #boxplot_of_victims_per_crime()
+    #geomap_of_victims_by_state()
+    #geomap_evolution_by_decade()
+    #bias_trends_over_time()
+    #hate_crime_seasonality_heatmap()
+    #regional_radar_comparison()
+    #offender_victim_flow_analysis()
+    #hate_crime_story_timeline()
+    
+    # Run comprehensive statistical testing
+    print("\n" + "="*80)
+    print("STARTING COMPREHENSIVE STATISTICAL ANALYSIS")
+    print("="*80)
+    try:
+        statistical_results = comprehensive_regional_testing(df)
+        export_statistical_results(statistical_results, OUTPUT_DIR + 'statistical_analysis_results.txt')
+        print("Statistical analysis completed successfully!")
+        print(f"Results exported to: {OUTPUT_DIR}statistical_analysis_results.txt")
+        print(f"Overall conclusion: {statistical_results['overall_conclusion']}")
+    except Exception as e:
+        print(f"Error in statistical analysis: {e}")
+        print("Continuing with visualization-only analysis...")
+        raise e
