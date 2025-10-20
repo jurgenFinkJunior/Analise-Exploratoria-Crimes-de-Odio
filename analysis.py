@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.colors import Normalize, LogNorm
 from matplotlib.cm import OrRd
+from matplotlib.patches import Patch
 import geopandas as gpd
 import numpy as np
 
@@ -234,7 +235,6 @@ def victims_by_presidential_terms():
                 str(int(value)), ha='center', va='bottom', fontweight='bold')
     
     # Add legend
-    from matplotlib.patches import Patch
     legend_elements = [Patch(facecolor='blue', alpha=0.7, label='Democrat'),
                       Patch(facecolor='red', alpha=0.7, label='Republican')]
     plt.legend(handles=legend_elements, loc='upper left')
