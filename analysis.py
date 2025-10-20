@@ -1351,17 +1351,5 @@ if __name__ == "__main__":
     #offender_victim_flow_analysis()
     #hate_crime_story_timeline()
     
-    # Run comprehensive statistical testing
-    print("\n" + "="*80)
-    print("STARTING COMPREHENSIVE STATISTICAL ANALYSIS")
-    print("="*80)
-    try:
-        statistical_results = comprehensive_regional_testing(df)
-        export_statistical_results(statistical_results, OUTPUT_DIR + 'statistical_analysis_results.txt')
-        print("Statistical analysis completed successfully!")
-        print(f"Results exported to: {OUTPUT_DIR}statistical_analysis_results.txt")
-        print(f"Overall conclusion: {statistical_results['overall_conclusion']}")
-    except Exception as e:
-        print(f"Error in statistical analysis: {e}")
-        print("Continuing with visualization-only analysis...")
-        raise e
+    #statistical_results = comprehensive_regional_testing(df)
+    #export_statistical_results(statistical_results, OUTPUT_DIR + 'statistical_analysis_results.txt')
