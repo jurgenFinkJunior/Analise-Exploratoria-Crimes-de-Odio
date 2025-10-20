@@ -373,14 +373,6 @@ def geomap_of_victims_by_state():
     plt.savefig(OUTPUT_DIR + 'geomap_victims_by_state.png', dpi=300, bbox_inches='tight', 
                 facecolor='white', edgecolor='none')
     plt.show()
-    
-    # Also create a summary table
-    print("\nTop 10 states by total hate crime victims:")
-    top_states = victims_by_state.nlargest(10, 'total_victims')
-    for _, row in top_states.iterrows():
-        print(f"{row['state_abbr']}: {int(row['total_victims']):,} victims")
-    
-    print(f"\nMap saved as: {OUTPUT_DIR}geomap_victims_by_state.png")
 
 def geomap_evolution_by_decade():
     """Create a 4-panel subplot showing hate crime evolution across 1994, 2004, 2014, and 2024"""
@@ -480,15 +472,6 @@ def geomap_evolution_by_decade():
     plt.savefig(OUTPUT_DIR + 'geomap_evolution_by_decade.png', dpi=300, bbox_inches='tight',
                 facecolor='white', edgecolor='none')
     plt.show()
-    
-    # Print summary statistics
-    print("\nHate Crime Evolution Summary:")
-    print("-" * 40)
-    for year in years:
-        year_total = df[df['data_year'] == year]['total_individual_victims'].sum()
-        print(f"{year}: {int(year_total):,} total victims")
-    
-    print(f"\nEvolution map saved as: {OUTPUT_DIR}geomap_evolution_by_decade.png")
 
 def bias_trends_over_time():
     """Create a sophisticated timeline showing how different bias categories have evolved"""
@@ -556,8 +539,6 @@ def bias_trends_over_time():
     plt.subplots_adjust(top=0.90)
     plt.savefig(OUTPUT_DIR + 'bias_trends_over_time.png', dpi=300, bbox_inches='tight')
     plt.show()
-    
-    print(f"Bias trends visualization saved as: {OUTPUT_DIR}bias_trends_over_time.png")
 
 def hate_crime_seasonality_heatmap():
     """Create a calendar heatmap showing seasonal patterns in hate crimes"""
@@ -612,8 +593,6 @@ def hate_crime_seasonality_heatmap():
     plt.tight_layout()
     plt.savefig(OUTPUT_DIR + 'hate_crime_seasonality.png', dpi=300, bbox_inches='tight')
     plt.show()
-    
-    print(f"Seasonality heatmap saved as: {OUTPUT_DIR}hate_crime_seasonality.png")
 
 def regional_radar_comparison():
     """Create radar charts comparing hate crime patterns across US regions"""
@@ -698,8 +677,6 @@ def regional_radar_comparison():
     plt.savefig(OUTPUT_DIR + 'regional_radar_comparison.png', dpi=300, bbox_inches='tight')
     plt.show()
     
-    print(f"Regional radar comparison saved as: {OUTPUT_DIR}regional_radar_comparison.png")
-
 def offender_victim_flow_analysis():
     """Create a sophisticated analysis of offender-victim demographic relationships"""
     # Filter data with both offender and victim information
@@ -777,8 +754,6 @@ def offender_victim_flow_analysis():
     plt.tight_layout()
     plt.savefig(OUTPUT_DIR + 'offender_victim_flow_analysis.png', dpi=300, bbox_inches='tight')
     plt.show()
-    
-    print(f"Offender-victim flow analysis saved as: {OUTPUT_DIR}offender_victim_flow_analysis.png")
 
 def hate_crime_story_timeline():
     """Create an innovative timeline that tells the story of hate crimes with key events"""
@@ -857,32 +832,6 @@ def hate_crime_story_timeline():
     plt.tight_layout()
     plt.savefig(OUTPUT_DIR + 'hate_crime_story_timeline.png', dpi=300, bbox_inches='tight')
     plt.show()
-    
-    # Print some insights
-    print("\n" + "="*60)
-    print("HATE CRIME STORY INSIGHTS")
-    print("="*60)
-    
-    max_year = yearly_totals.idxmax()
-    max_victims = yearly_totals.max()
-    min_year = yearly_totals.idxmin()
-    min_victims = yearly_totals.min()
-    
-    print(f"Peak year: {max_year} with {int(max_victims):,} victims")
-    print(f"Lowest year: {min_year} with {int(min_victims):,} victims")
-    print(f"Overall trend: {(yearly_totals.iloc[-1] - yearly_totals.iloc[0]) / len(yearly_totals):.1f} victims/year average change")
-    
-    # Correlation with events
-    event_years = list(historical_events.keys())
-    event_victims = [yearly_totals.get(year, 0) for year in event_years]
-    avg_other_years = yearly_totals.drop(event_years, errors='ignore').mean()
-    avg_event_years = np.mean(event_victims)
-    
-    print(f"Average victims in event years: {avg_event_years:.0f}")
-    print(f"Average victims in other years: {avg_other_years:.0f}")
-    print(f"Event year impact: {((avg_event_years - avg_other_years) / avg_other_years * 100):.1f}% difference")
-    
-    print(f"\nStory timeline saved as: {OUTPUT_DIR}hate_crime_story_timeline.png")
 
 if __name__ == "__main__":
     os.makedirs(OUTPUT_DIR, exist_ok=True)
