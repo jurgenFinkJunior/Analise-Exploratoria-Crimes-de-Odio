@@ -1350,67 +1350,94 @@ def poisson_safety_analysis(df):
     # Prepare regional data
     regional_data = prepare_regional_data(df_2024)
     
-    # Convert incident_date to datetime for monthly analysis
+    # Convert incident_date to datetime for daily analysis
     regional_data['incident_date'] = pd.to_datetime(regional_data['incident_date'], errors='coerce')
     regional_data = regional_data.dropna(subset=['incident_date'])
-    regional_data['month'] = regional_data['incident_date'].dt.month
+    regional_data['date'] = regional_data['incident_date'].dt.date
     
-    # Calculate monthly crime counts by region for Poisson analysis
-    monthly_regional_crimes = regional_data.groupby(['month', 'region'])['total_individual_victims'].sum().reset_index()
+    # Calculate daily crime counts by region for Poisson analysis
+    daily_regional_crimes = regional_data.groupby(['date', 'region'])['total_individual_victims'].sum().reset_index()
+    
+    # Create complete date range for 2024 to include days with zero crimes
+    start_date = pd.to_datetime('2024-01-01').date()
+    end_date = pd.to_datetime('2024-12-31').date()
+    all_dates = pd.date_range(start_date, end_date, freq='D').date
+    
+    # Create complete dataset with all dates and regions (filling missing with 0)
+    regions = ['Northeast', 'Midwest', 'South', 'West']
+    complete_daily_data = []
+    
+    for region in regions:
+        for date in all_dates:
+            existing = daily_regional_crimes[(daily_regional_crimes['date'] == date) & 
+                                           (daily_regional_crimes['region'] == region)]
+            if len(existing) > 0:
+                crimes = existing['total_individual_victims'].iloc[0]
+            else:
+                crimes = 0
+            complete_daily_data.append({'date': date, 'region': region, 'crimes': crimes})
+    
+    complete_daily_df = pd.DataFrame(complete_daily_data)
     
     # Also calculate total crimes per region for rate comparisons
     total_by_region = regional_data.groupby('region')['total_individual_victims'].sum()
     
-    # Calculate Poisson parameters (lambda = mean rate) for each region based on monthly data
+    # Calculate Poisson parameters (lambda = mean rate) for each region based on daily data
     regional_stats = {}
     
     for region in ['Northeast', 'Midwest', 'South', 'West']:
-        region_monthly = monthly_regional_crimes[monthly_regional_crimes['region'] == region]['total_individual_victims']
+        region_daily = complete_daily_df[complete_daily_df['region'] == region]['crimes']
         region_total = total_by_region.get(region, 0)
         
-        if len(region_monthly) > 0:
-            # Poisson parameter (lambda) is the mean monthly rate
-            lambda_param = region_monthly.mean()
+        if len(region_daily) > 0:
+            # Poisson parameter (lambda) is the mean daily rate
+            lambda_param = region_daily.mean()
             
             # Annual lambda (for yearly projections)
-            annual_lambda = lambda_param * 12
+            annual_lambda = lambda_param * 365
+            # Monthly lambda (for monthly projections)
+            monthly_lambda = lambda_param * 30
             
             # Calculate statistics
-            observed_variance = region_monthly.var()
+            observed_variance = region_daily.var()
             # Overdispersion test (variance > mean indicates overdispersion)
             overdispersion_ratio = observed_variance / lambda_param if lambda_param > 0 else 0
             
-            # Calculate probabilities for safety assessment (monthly basis)
-            # Probability of experiencing 0 crimes in a month (perfectly safe month)
-            prob_zero_month = poisson.pmf(0, lambda_param)
+            # Calculate probabilities for safety assessment (daily basis)
+            # Probability of experiencing 0 crimes in a day (perfectly safe day)
+            prob_zero_day = poisson.pmf(0, lambda_param)
             
-            # Probability of experiencing <= mean crimes in a month (below average risk)
-            prob_below_mean_month = poisson.cdf(lambda_param, lambda_param)
+            # Probability of experiencing <= mean crimes in a day (below average risk)
+            prob_below_mean_day = poisson.cdf(lambda_param, lambda_param)
             
-            # Probability of experiencing > 2*mean crimes in a month (high risk month)
-            prob_high_risk_month = 1 - poisson.cdf(2 * lambda_param, lambda_param)
+            # Probability of experiencing > 2*mean crimes in a day (high risk day)
+            prob_high_risk_day = 1 - poisson.cdf(2 * lambda_param, lambda_param)
             
-            # Annual probabilities (assuming 12 independent months)
-            prob_zero_year = prob_zero_month ** 12  # All 12 months crime-free
-            prob_any_high_risk_year = 1 - (1 - prob_high_risk_month) ** 12  # At least one high-risk month
+            # Monthly probabilities (assuming 30 independent days)
+            prob_zero_month = prob_zero_day ** 30  # All 30 days crime-free
+            prob_any_high_risk_month = 1 - (1 - prob_high_risk_day) ** 30  # At least one high-risk day in month
             
-            # 95% confidence interval for monthly rate
+            # Annual probabilities (assuming 365 independent days)
+            prob_zero_year = prob_zero_day ** 365  # All 365 days crime-free
+            prob_any_high_risk_year = 1 - (1 - prob_high_risk_day) ** 365  # At least one high-risk day in year
+            
+            # 95% confidence interval for daily rate
             # For small lambda, use exact Poisson CI; for large lambda, use normal approximation
-            if lambda_param >= 10:
-                margin_error = 1.96 * np.sqrt(lambda_param / len(region_monthly))
+            if lambda_param >= 5:
+                margin_error = 1.96 * np.sqrt(lambda_param / len(region_daily))
                 ci_lower = max(0, lambda_param - margin_error)
                 ci_upper = lambda_param + margin_error
             else:
                 # Use exact Poisson confidence intervals
                 alpha = 0.05
-                total_crimes = region_monthly.sum()
-                n_months = len(region_monthly)
+                total_crimes = region_daily.sum()
+                n_days = len(region_daily)
                 if total_crimes > 0:
-                    ci_lower = stats.chi2.ppf(alpha/2, 2*total_crimes) / (2*n_months)
-                    ci_upper = stats.chi2.ppf(1-alpha/2, 2*total_crimes + 2) / (2*n_months)
+                    ci_lower = stats.chi2.ppf(alpha/2, 2*total_crimes) / (2*n_days)
+                    ci_upper = stats.chi2.ppf(1-alpha/2, 2*total_crimes + 2) / (2*n_days)
                 else:
                     ci_lower = 0
-                    ci_upper = stats.chi2.ppf(1-alpha/2, 2) / (2*n_months)
+                    ci_upper = stats.chi2.ppf(1-alpha/2, 2) / (2*n_days)
             
             # Risk classification based on annual lambda parameter
             if annual_lambda < 100:
@@ -1423,42 +1450,48 @@ def poisson_safety_analysis(df):
                 risk_level = "Very High"
             
             regional_stats[region] = {
-                'lambda_monthly': lambda_param,
+                'lambda_daily': lambda_param,
+                'lambda_monthly': monthly_lambda,
                 'lambda_annual': annual_lambda,
                 'observed_variance': observed_variance,
                 'theoretical_variance': lambda_param,  # For Poisson, variance = mean
                 'overdispersion_ratio': overdispersion_ratio,
+                'prob_zero_day': prob_zero_day,
+                'prob_below_mean_day': prob_below_mean_day,
+                'prob_high_risk_day': prob_high_risk_day,
                 'prob_zero_month': prob_zero_month,
-                'prob_below_mean_month': prob_below_mean_month,
-                'prob_high_risk_month': prob_high_risk_month,
+                'prob_any_high_risk_month': prob_any_high_risk_month,
                 'prob_zero_year': prob_zero_year,
                 'prob_any_high_risk_year': prob_any_high_risk_year,
                 'ci_lower': ci_lower,
                 'ci_upper': ci_upper,
                 'risk_level': risk_level,
-                'n_months': len(region_monthly),
+                'n_days': len(region_daily),
                 'total_crimes_2024': region_total,
-                'monthly_data': region_monthly.values
+                'daily_data': region_daily.values
             }
         else:
             # Handle regions with no data
             regional_stats[region] = {
+                'lambda_daily': 0,
                 'lambda_monthly': 0,
                 'lambda_annual': 0,
                 'observed_variance': 0,
                 'theoretical_variance': 0,
                 'overdispersion_ratio': 0,
+                'prob_zero_day': 1.0,
+                'prob_below_mean_day': 1.0,
+                'prob_high_risk_day': 0.0,
                 'prob_zero_month': 1.0,
-                'prob_below_mean_month': 1.0,
-                'prob_high_risk_month': 0.0,
+                'prob_any_high_risk_month': 0.0,
                 'prob_zero_year': 1.0,
                 'prob_any_high_risk_year': 0.0,
                 'ci_lower': 0,
                 'ci_upper': 0,
                 'risk_level': "No Data",
-                'n_months': 0,
+                'n_days': 0,
                 'total_crimes_2024': 0,
-                'monthly_data': np.array([])
+                'daily_data': np.array([])
             }
     
     # Compare regions using Poisson rate ratios
@@ -1469,8 +1502,8 @@ def poisson_safety_analysis(df):
         for j in range(i+1, len(regions)):
             region1, region2 = regions[i], regions[j]
             
-            lambda1 = regional_stats[region1]['lambda_monthly']
-            lambda2 = regional_stats[region2]['lambda_monthly']
+            lambda1 = regional_stats[region1]['lambda_daily']
+            lambda2 = regional_stats[region2]['lambda_daily']
             
             # Rate ratio (how many times more likely is region1 vs region2)
             rate_ratio = lambda1 / lambda2 if lambda2 > 0 else float('inf')
@@ -1510,15 +1543,15 @@ def poisson_safety_analysis(df):
                                else f"{region2} has {1/rate_ratio:.2f}x the crime rate of {region1}"
             }
     
-    # Overall model validation using 2024 monthly data
-    # Test if the overall 2024 monthly data follows Poisson distribution
-    all_monthly_crimes = monthly_regional_crimes.groupby('month')['total_individual_victims'].sum()
-    overall_lambda = all_monthly_crimes.mean()
+    # Overall model validation using 2024 daily data
+    # Test if the overall 2024 daily data follows Poisson distribution
+    all_daily_crimes = complete_daily_df.groupby('date')['crimes'].sum()
+    overall_lambda = all_daily_crimes.mean()
     
     # Kolmogorov-Smirnov test for Poisson goodness of fit
     # Generate expected Poisson values
-    expected_poisson = poisson.rvs(overall_lambda, size=len(all_monthly_crimes), random_state=42)
-    ks_statistic, ks_p_value = stats.ks_2samp(all_monthly_crimes.values, expected_poisson)
+    expected_poisson = poisson.rvs(overall_lambda, size=len(all_daily_crimes), random_state=42)
+    ks_statistic, ks_p_value = stats.ks_2samp(all_daily_crimes.values, expected_poisson)
     
     poisson_fit_good = ks_p_value > 0.05
     
@@ -1543,15 +1576,15 @@ def export_poisson_analysis(results, filename='poisson_safety_analysis.txt'):
         
         f.write("OVERVIEW:\n")
         f.write("This analysis models 2024 hate crimes as a Poisson process to assess current regional safety.\n")
-        f.write("Using monthly data from 2024 provides the most current and relevant safety assessment.\n")
+        f.write("Using daily data from 2024 provides the most current and granular safety assessment.\n")
         f.write("The Poisson distribution is appropriate for modeling rare, discrete events that\n")
         f.write("occur independently over time with a constant average rate.\n\n")
         
         f.write("KEY ASSUMPTIONS:\n")
         f.write("• Crimes occur independently (one doesn't cause another)\n")
-        f.write("• Monthly crime rate (λ) remains constant throughout 2024\n")
+        f.write("• Daily crime rate (λ) remains constant throughout 2024\n")
         f.write("• Events are discrete and relatively rare\n")
-        f.write("• Monthly periods are of equal length\n\n")
+        f.write("• Daily periods are of equal length\n\n")
         
         # Regional Analysis
         f.write("REGIONAL POISSON PARAMETERS AND SAFETY METRICS (2024):\n")
@@ -1568,19 +1601,22 @@ def export_poisson_analysis(results, filename='poisson_safety_analysis.txt'):
             f.write(f"{region.upper()} REGION (2024):\n")
             f.write("-" * 30 + "\n")
             if stats['risk_level'] != "No Data":
-                f.write(f"Monthly Poisson Parameter (λ): {stats['lambda_monthly']:.2f} crimes/month\n")
+                f.write(f"Daily Poisson Parameter (λ): {stats['lambda_daily']:.4f} crimes/day\n")
+                f.write(f"Monthly Projection: {stats['lambda_monthly']:.2f} crimes/month\n")
                 f.write(f"Annual Projection: {stats['lambda_annual']:.2f} crimes/year\n")
-                f.write(f"95% Confidence Interval (monthly): [{stats['ci_lower']:.2f}, {stats['ci_upper']:.2f}]\n")
+                f.write(f"95% Confidence Interval (daily): [{stats['ci_lower']:.4f}, {stats['ci_upper']:.4f}]\n")
                 f.write(f"Risk Level: {stats['risk_level']}\n")
-                f.write(f"Months of data: {stats['n_months']}\n")
+                f.write(f"Days of data: {stats['n_days']}\n")
                 f.write(f"Total crimes observed in 2024: {stats['total_crimes_2024']}\n\n")
                 
                 f.write("SAFETY PROBABILITIES:\n")
-                f.write(f"• Probability of zero crimes in a month: {stats['prob_zero_month']:.4f} ({stats['prob_zero_month']*100:.2f}%)\n")
-                f.write(f"• Probability of below-average month: {stats['prob_below_mean_month']:.4f} ({stats['prob_below_mean_month']*100:.2f}%)\n")
-                f.write(f"• Probability of high-risk month (>2x average): {stats['prob_high_risk_month']:.4f} ({stats['prob_high_risk_month']*100:.2f}%)\n")
-                f.write(f"• Probability of crime-free year (all 12 months): {stats['prob_zero_year']:.6f} ({stats['prob_zero_year']*100:.4f}%)\n")
-                f.write(f"• Probability of any high-risk month in year: {stats['prob_any_high_risk_year']:.4f} ({stats['prob_any_high_risk_year']*100:.2f}%)\n\n")
+                f.write(f"• Probability of zero crimes in a day: {stats['prob_zero_day']:.4f} ({stats['prob_zero_day']*100:.2f}%)\n")
+                f.write(f"• Probability of below-average day: {stats['prob_below_mean_day']:.4f} ({stats['prob_below_mean_day']*100:.2f}%)\n")
+                f.write(f"• Probability of high-risk day (>2x average): {stats['prob_high_risk_day']:.4f} ({stats['prob_high_risk_day']*100:.2f}%)\n")
+                f.write(f"• Probability of zero crimes in a month (30 days): {stats['prob_zero_month']:.6f} ({stats['prob_zero_month']*100:.4f}%)\n")
+                f.write(f"• Probability of any high-risk day in month: {stats['prob_any_high_risk_month']:.4f} ({stats['prob_any_high_risk_month']*100:.2f}%)\n")
+                f.write(f"• Probability of crime-free year (365 days): {stats['prob_zero_year']:.10f} ({stats['prob_zero_year']*100:.8f}%)\n")
+                f.write(f"• Probability of any high-risk day in year: {stats['prob_any_high_risk_year']:.4f} ({stats['prob_any_high_risk_year']*100:.2f}%)\n\n")
             else:
                 f.write("No data available for this region in 2024\n\n")
             
@@ -1659,16 +1695,18 @@ def export_poisson_analysis(results, filename='poisson_safety_analysis.txt'):
                 f.write(f"{rank}. {region}: λ = {stats['lambda_annual']:.2f} crimes/year ({stats['risk_level']} Risk)\n")
             
             f.write(f"\n🏆 SAFEST REGION (2024): {safest_region}\n")
-            f.write(f"   • Expected crimes per year: {regional_stats[safest_region]['lambda_annual']:.2f}\n")
+            f.write(f"   • Expected crimes per day: {regional_stats[safest_region]['lambda_daily']:.4f}\n")
             f.write(f"   • Expected crimes per month: {regional_stats[safest_region]['lambda_monthly']:.2f}\n")
-            f.write(f"   • Probability of crime-free month: {regional_stats[safest_region]['prob_zero_month']*100:.2f}%\n")
-            f.write(f"   • Probability of crime-free year: {regional_stats[safest_region]['prob_zero_year']*100:.4f}%\n")
+            f.write(f"   • Expected crimes per year: {regional_stats[safest_region]['lambda_annual']:.2f}\n")
+            f.write(f"   • Probability of crime-free day: {regional_stats[safest_region]['prob_zero_day']*100:.2f}%\n")
+            f.write(f"   • Probability of crime-free month: {regional_stats[safest_region]['prob_zero_month']*100:.4f}%\n")
             
             f.write(f"\n⚠️  HIGHEST RISK REGION (2024): {least_safe_region}\n")
-            f.write(f"   • Expected crimes per year: {regional_stats[least_safe_region]['lambda_annual']:.2f}\n")
+            f.write(f"   • Expected crimes per day: {regional_stats[least_safe_region]['lambda_daily']:.4f}\n")
             f.write(f"   • Expected crimes per month: {regional_stats[least_safe_region]['lambda_monthly']:.2f}\n")
-            f.write(f"   • Probability of high-risk month: {regional_stats[least_safe_region]['prob_high_risk_month']*100:.2f}%\n")
-            f.write(f"   • Probability of any high-risk month in year: {regional_stats[least_safe_region]['prob_any_high_risk_year']*100:.2f}%\n")
+            f.write(f"   • Expected crimes per year: {regional_stats[least_safe_region]['lambda_annual']:.2f}\n")
+            f.write(f"   • Probability of high-risk day: {regional_stats[least_safe_region]['prob_high_risk_day']*100:.2f}%\n")
+            f.write(f"   • Probability of any high-risk day in year: {regional_stats[least_safe_region]['prob_any_high_risk_year']*100:.2f}%\n")
         else:
             f.write("No regional data available for 2024 analysis.\n")
         
@@ -1681,7 +1719,7 @@ def export_poisson_analysis(results, filename='poisson_safety_analysis.txt'):
         
         f.write("\nLIMITATIONS AND CONSIDERATIONS:\n")
         f.write("• Analysis limited to 2024 data - may not reflect long-term trends\n")
-        f.write("• Poisson model assumes constant monthly rate throughout 2024\n")
+        f.write("• Poisson model assumes constant daily rate throughout 2024\n")
         f.write("• Does not account for population size differences between regions\n")
         f.write("• Reporting practices may vary between regions\n")
         f.write("• External events (e.g., social tensions, elections) can temporarily alter rates\n")
@@ -1731,10 +1769,10 @@ if __name__ == "__main__":
         regions_with_data = {k: v for k, v in regional_stats.items() if v['risk_level'] != "No Data"}
         
         if regions_with_data:
-            safest = min(regions_with_data.keys(), key=lambda r: regional_stats[r]['lambda_annual'])
-            least_safe = max(regions_with_data.keys(), key=lambda r: regional_stats[r]['lambda_annual'])
-            print(f"Safest region (2024): {safest} (λ = {regional_stats[safest]['lambda_annual']:.2f} crimes/year)")
-            print(f"Highest risk region (2024): {least_safe} (λ = {regional_stats[least_safe]['lambda_annual']:.2f} crimes/year)")
+            safest = min(regions_with_data.keys(), key=lambda r: regional_stats[r]['lambda_daily'])
+            least_safe = max(regions_with_data.keys(), key=lambda r: regional_stats[r]['lambda_daily'])
+            print(f"Safest region (2024): {safest} (λ = {regional_stats[safest]['lambda_daily']:.4f} crimes/day, {regional_stats[safest]['lambda_annual']:.2f} crimes/year)")
+            print(f"Highest risk region (2024): {least_safe} (λ = {regional_stats[least_safe]['lambda_daily']:.4f} crimes/day, {regional_stats[least_safe]['lambda_annual']:.2f} crimes/year)")
         else:
             print("No regional data available for 2024")
         
