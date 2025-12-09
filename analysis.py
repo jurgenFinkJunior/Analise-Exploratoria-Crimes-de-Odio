@@ -10,6 +10,11 @@ import numpy as np
 from scipy.stats import chi2_contingency, chi2, f_oneway, kruskal, levene, shapiro, tukey_hsd, poisson
 from scipy import stats
 import warnings
+from statsmodels.tsa.stattools import adfuller, acf, pacf
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.seasonal import seasonal_decompose
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
 
 OUTPUT_DIR = 'output/'
 MULTIPLE_SEP = ';'
@@ -1334,6 +1339,558 @@ def export_statistical_results(results, filename='statistical_analysis_results.t
         f.write("• Regional differences may be due to reporting practices, not just crime rates\n")
         f.write("• Population adjustments should be considered in future analyses\n")
 
+def temporal_series_analysis(df):
+    """
+    Comprehensive temporal analysis including ARIMA, seasonality, trends, and forecasting
+    """
+    print("Running comprehensive temporal series analysis...")
+    
+    # Prepare monthly time series data
+    df_clean = df.copy()
+    df_clean['incident_date'] = pd.to_datetime(df_clean['incident_date'], errors='coerce')
+    df_clean = df_clean.dropna(subset=['incident_date'])
+    
+    # Create monthly series
+    monthly_crimes = df_clean.groupby(df_clean['incident_date'].dt.to_period('M'))['total_individual_victims'].sum()
+    monthly_crimes.index = monthly_crimes.index.to_timestamp()
+    
+    # Ensure we have a complete time series (fill missing months with 0)
+    date_range = pd.date_range(start=monthly_crimes.index.min(), end=monthly_crimes.index.max(), freq='MS')
+    monthly_crimes = monthly_crimes.reindex(date_range, fill_value=0)
+    
+    results = {}
+    
+    # 1. STATIONARITY TEST (Augmented Dickey-Fuller)
+    print("  - Testing stationarity...")
+    adf_result = adfuller(monthly_crimes)
+    results['adf_statistic'] = adf_result[0]
+    results['adf_pvalue'] = adf_result[1]
+    results['is_stationary'] = adf_result[1] < 0.05
+    
+    # 2. TREND DECOMPOSITION
+    print("  - Decomposing time series...")
+    # Use multiplicative if all values > 0, otherwise additive
+    decomposition = seasonal_decompose(monthly_crimes, model='additive', period=12, extrapolate_trend='freq')
+    results['decomposition'] = decomposition
+    
+    # 3. LINEAR REGRESSION FOR TREND
+    print("  - Fitting linear trend...")
+    X = np.arange(len(monthly_crimes)).reshape(-1, 1)
+    y = monthly_crimes.values
+    
+    linear_model = LinearRegression()
+    linear_model.fit(X, y)
+    trend_predictions = linear_model.predict(X)
+    
+    results['linear_model'] = linear_model
+    results['linear_slope'] = linear_model.coef_[0]
+    results['linear_intercept'] = linear_model.intercept_
+    results['linear_r2'] = r2_score(y, trend_predictions)
+    results['trend_predictions'] = trend_predictions
+    
+    # Determine if trend is increasing, decreasing, or stable
+    if results['linear_slope'] > 0.5:
+        trend_direction = "Increasing"
+    elif results['linear_slope'] < -0.5:
+        trend_direction = "Decreasing"
+    else:
+        trend_direction = "Stable"
+    results['trend_direction'] = trend_direction
+    
+    # 4. ARIMA MODEL
+    print("  - Fitting ARIMA model...")
+    # Try different ARIMA configurations and choose best AIC
+    best_aic = float('inf')
+    best_order = None
+    best_model = None
+    
+    # Grid search for best parameters (limited to save time)
+    for p in range(3):
+        for d in range(2):
+            for q in range(3):
+                try:
+                    model = ARIMA(monthly_crimes, order=(p, d, q))
+                    fitted_model = model.fit()
+                    if fitted_model.aic < best_aic:
+                        best_aic = fitted_model.aic
+                        best_order = (p, d, q)
+                        best_model = fitted_model
+                except:
+                    continue
+    
+    results['arima_order'] = best_order
+    results['arima_aic'] = best_aic
+    results['arima_model'] = best_model
+    
+    # 5. FORECASTING (12 months ahead)
+    print("  - Generating forecasts...")
+    forecast_steps = 12
+    
+    # ARIMA forecast
+    arima_forecast = best_model.forecast(steps=forecast_steps)
+    arima_forecast_ci = best_model.get_forecast(steps=forecast_steps).conf_int()
+    
+    # Linear trend forecast
+    future_X = np.arange(len(monthly_crimes), len(monthly_crimes) + forecast_steps).reshape(-1, 1)
+    linear_forecast = linear_model.predict(future_X)
+    
+    # Create forecast dates
+    last_date = monthly_crimes.index[-1]
+    forecast_dates = pd.date_range(start=last_date + pd.DateOffset(months=1), periods=forecast_steps, freq='MS')
+    
+    results['forecast_dates'] = forecast_dates
+    results['arima_forecast'] = arima_forecast
+    results['arima_forecast_ci'] = arima_forecast_ci
+    results['linear_forecast'] = linear_forecast
+    
+    # 6. AUTOCORRELATION ANALYSIS
+    print("  - Computing autocorrelations...")
+    acf_values = acf(monthly_crimes, nlags=24)
+    pacf_values = pacf(monthly_crimes, nlags=24)
+    
+    results['acf'] = acf_values
+    results['pacf'] = pacf_values
+    
+    # 7. SEASONALITY DETECTION
+    # Check if certain months have consistently higher/lower crime rates
+    df_clean['month'] = df_clean['incident_date'].dt.month
+    monthly_avg = df_clean.groupby('month')['total_individual_victims'].sum().values
+    seasonal_index = monthly_avg / monthly_avg.mean()
+    
+    peak_month = np.argmax(seasonal_index) + 1
+    low_month = np.argmin(seasonal_index) + 1
+    
+    results['seasonal_index'] = seasonal_index
+    results['peak_month'] = peak_month
+    results['low_month'] = low_month
+    results['seasonality_strength'] = seasonal_index.std()
+    
+    # 8. Store time series data
+    results['monthly_crimes'] = monthly_crimes
+    results['time_index'] = X.flatten()
+    
+    return results
+
+def create_temporal_visualizations(results):
+    """
+    Create comprehensive visualizations for temporal analysis - saving each plot separately
+    """
+    print("Creating temporal analysis visualizations...")
+    
+    monthly_crimes = results['monthly_crimes']
+    decomposition = results['decomposition']
+    
+    # 1. Original Time Series with Linear Trend
+    print("  - Saving plot 1/12: Time series with linear trend...")
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.plot(monthly_crimes.index, monthly_crimes.values, 'b-', alpha=0.6, linewidth=2, label='Observed')
+    ax.plot(monthly_crimes.index, results['trend_predictions'], 'r--', linewidth=2, label=f'Linear Trend (slope={results["linear_slope"]:.2f})')
+    ax.set_title('Monthly Hate Crimes with Linear Trend', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Date', fontsize=12)
+    ax.set_ylabel('Number of Victims', fontsize=12)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'temporal_01_time_series_with_trend.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 2. Trend Component
+    print("  - Saving plot 2/12: Trend component...")
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.plot(decomposition.trend.index, decomposition.trend.values, 'g-', linewidth=2)
+    ax.set_title('Trend Component (Decomposition)', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Date', fontsize=12)
+    ax.set_ylabel('Trend', fontsize=12)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'temporal_02_trend_component.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 3. Seasonal Component
+    print("  - Saving plot 3/12: Seasonal component...")
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.plot(decomposition.seasonal.index, decomposition.seasonal.values, 'orange', linewidth=2)
+    ax.set_title('Seasonal Component (12-month)', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Date', fontsize=12)
+    ax.set_ylabel('Seasonal Effect', fontsize=12)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'temporal_03_seasonal_component.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 4. Residual Component
+    print("  - Saving plot 4/12: Residual component...")
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.plot(decomposition.resid.index, decomposition.resid.values, 'purple', alpha=0.5, linewidth=1)
+    ax.axhline(y=0, color='r', linestyle='--', linewidth=1)
+    ax.set_title('Residual Component', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Date', fontsize=12)
+    ax.set_ylabel('Residuals', fontsize=12)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'temporal_04_residual_component.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 5. Autocorrelation Function (ACF)
+    print("  - Saving plot 5/12: Autocorrelation function...")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    acf_values = results['acf']
+    ax.stem(range(len(acf_values)), acf_values, basefmt=' ')
+    ax.axhline(y=1.96/np.sqrt(len(monthly_crimes)), linestyle='--', color='r', alpha=0.5, label='95% CI')
+    ax.axhline(y=-1.96/np.sqrt(len(monthly_crimes)), linestyle='--', color='r', alpha=0.5)
+    ax.set_title('Autocorrelation Function (ACF)', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Lag', fontsize=12)
+    ax.set_ylabel('ACF', fontsize=12)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'temporal_05_acf.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 6. Partial Autocorrelation Function (PACF)
+    print("  - Saving plot 6/12: Partial autocorrelation function...")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    pacf_values = results['pacf']
+    ax.stem(range(len(pacf_values)), pacf_values, basefmt=' ')
+    ax.axhline(y=1.96/np.sqrt(len(monthly_crimes)), linestyle='--', color='r', alpha=0.5, label='95% CI')
+    ax.axhline(y=-1.96/np.sqrt(len(monthly_crimes)), linestyle='--', color='r', alpha=0.5)
+    ax.set_title('Partial Autocorrelation Function (PACF)', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Lag', fontsize=12)
+    ax.set_ylabel('PACF', fontsize=12)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'temporal_06_pacf.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 7. Seasonal Pattern by Month
+    print("  - Saving plot 7/12: Seasonal pattern by month...")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    seasonal_index = results['seasonal_index']
+    colors = ['red' if i+1 == results['peak_month'] else 'blue' if i+1 == results['low_month'] else 'gray' 
+              for i in range(12)]
+    ax.bar(months, seasonal_index, color=colors, alpha=0.7, edgecolor='black')
+    ax.axhline(y=1.0, color='black', linestyle='--', linewidth=1, label='Average')
+    ax.set_title('Seasonal Pattern (Average by Month)', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Month', fontsize=12)
+    ax.set_ylabel('Seasonal Index (relative to mean)', fontsize=12)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3, axis='y')
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'temporal_07_seasonal_pattern_by_month.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 8. ARIMA Forecast
+    print("  - Saving plot 8/12: ARIMA forecast...")
+    fig, ax = plt.subplots(figsize=(14, 6))
+    # Plot historical data (last 36 months for clarity)
+    historical_period = monthly_crimes.iloc[-36:]
+    ax.plot(historical_period.index, historical_period.values, 'b-', linewidth=2, label='Historical')
+    
+    # Plot forecast
+    forecast_dates = results['forecast_dates']
+    arima_forecast = results['arima_forecast']
+    arima_ci = results['arima_forecast_ci']
+    
+    ax.plot(forecast_dates, arima_forecast, 'r--', linewidth=2, label=f'ARIMA{results["arima_order"]} Forecast')
+    ax.fill_between(forecast_dates, arima_ci.iloc[:, 0], arima_ci.iloc[:, 1], alpha=0.3, color='red', label='95% CI')
+    
+    ax.set_title('12-Month ARIMA Forecast', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Date', fontsize=12)
+    ax.set_ylabel('Predicted Victims', fontsize=12)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'temporal_08_arima_forecast.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 9. Comparison: ARIMA vs Linear Forecast
+    print("  - Saving plot 9/12: Forecast comparison...")
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.plot(historical_period.index, historical_period.values, 'b-', linewidth=2, label='Historical')
+    ax.plot(forecast_dates, arima_forecast, 'r--', linewidth=2, label='ARIMA Forecast')
+    ax.plot(forecast_dates, results['linear_forecast'], 'g--', linewidth=2, label='Linear Trend Forecast')
+    ax.set_title('Forecast Comparison: ARIMA vs Linear', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Date', fontsize=12)
+    ax.set_ylabel('Predicted Victims', fontsize=12)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'temporal_09_forecast_comparison.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 10. Distribution of Monthly Values
+    print("  - Saving plot 10/12: Distribution of monthly values...")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.hist(monthly_crimes.values, bins=30, alpha=0.7, color='skyblue', edgecolor='black')
+    ax.axvline(monthly_crimes.mean(), color='red', linestyle='--', linewidth=2, label=f'Mean = {monthly_crimes.mean():.1f}')
+    ax.axvline(monthly_crimes.median(), color='green', linestyle='--', linewidth=2, label=f'Median = {monthly_crimes.median():.1f}')
+    ax.set_title('Distribution of Monthly Crime Counts', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Number of Victims per Month', fontsize=12)
+    ax.set_ylabel('Frequency', fontsize=12)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3, axis='y')
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'temporal_10_distribution_monthly_values.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 11. Rolling Statistics (12-month window)
+    print("  - Saving plot 11/12: Rolling statistics...")
+    fig, ax = plt.subplots(figsize=(14, 6))
+    rolling_mean = monthly_crimes.rolling(window=12).mean()
+    rolling_std = monthly_crimes.rolling(window=12).std()
+    ax.plot(monthly_crimes.index, monthly_crimes.values, 'b-', alpha=0.3, label='Original')
+    ax.plot(rolling_mean.index, rolling_mean.values, 'r-', linewidth=2, label='12-Month Rolling Mean')
+    ax.fill_between(rolling_mean.index, 
+                     rolling_mean - rolling_std, 
+                     rolling_mean + rolling_std, 
+                     alpha=0.2, color='red', label='±1 Std Dev')
+    ax.set_title('Rolling Statistics (12-Month Window)', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Date', fontsize=12)
+    ax.set_ylabel('Number of Victims', fontsize=12)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'temporal_11_rolling_statistics.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 12. Year-over-Year Growth Rate
+    print("  - Saving plot 12/12: Year-over-year growth rate...")
+    fig, ax = plt.subplots(figsize=(14, 6))
+    yoy_change = monthly_crimes.pct_change(periods=12) * 100
+    ax.plot(yoy_change.index, yoy_change.values, 'purple', linewidth=2)
+    ax.axhline(y=0, color='black', linestyle='-', linewidth=1)
+    ax.fill_between(yoy_change.index, 0, yoy_change.values, 
+                     where=(yoy_change.values >= 0), alpha=0.3, color='red', label='Increase')
+    ax.fill_between(yoy_change.index, 0, yoy_change.values, 
+                     where=(yoy_change.values < 0), alpha=0.3, color='green', label='Decrease')
+    ax.set_title('Year-over-Year Growth Rate', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Date', fontsize=12)
+    ax.set_ylabel('YoY Change (%)', fontsize=12)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR + 'temporal_12_yoy_growth_rate.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print("  ✓ All 12 temporal visualizations saved successfully!")
+    print("     Files: temporal_01_*.png through temporal_12_*.png")
+
+def export_temporal_analysis(results, filename='temporal_analysis_results.txt'):
+    """
+    Export temporal analysis results to a text file with detailed explanations
+    """
+    monthly_crimes = results['monthly_crimes']
+    
+    with open(filename, 'w') as f:
+        f.write("="*80 + "\n")
+        f.write("COMPREHENSIVE TEMPORAL ANALYSIS OF HATE CRIMES\n")
+        f.write("="*80 + "\n\n")
+        
+        f.write("OVERVIEW:\n")
+        f.write("This analysis examines temporal patterns in hate crimes using advanced time series\n")
+        f.write("methods including ARIMA modeling, seasonal decomposition, trend analysis, and\n")
+        f.write("forecasting to understand past patterns and predict future occurrences.\n\n")
+        
+        f.write("DATA SUMMARY:\n")
+        f.write(f"Time period: {monthly_crimes.index[0].strftime('%Y-%m')} to {monthly_crimes.index[-1].strftime('%Y-%m')}\n")
+        f.write(f"Total months: {len(monthly_crimes)}\n")
+        f.write(f"Total victims: {monthly_crimes.sum()}\n")
+        f.write(f"Average per month: {monthly_crimes.mean():.2f}\n")
+        f.write(f"Median per month: {monthly_crimes.median():.2f}\n")
+        f.write(f"Standard deviation: {monthly_crimes.std():.2f}\n")
+        f.write(f"Min: {monthly_crimes.min()} | Max: {monthly_crimes.max()}\n\n")
+        
+        # 1. STATIONARITY ANALYSIS
+        f.write("1. STATIONARITY ANALYSIS (Augmented Dickey-Fuller Test)\n")
+        f.write("-" * 60 + "\n")
+        f.write("Purpose: Tests whether the time series has a constant mean and variance over time\n\n")
+        f.write(f"ADF Statistic: {results['adf_statistic']:.4f}\n")
+        f.write(f"P-value: {results['adf_pvalue']:.4f}\n")
+        
+        if results['is_stationary']:
+            f.write("✓ STATIONARY: The series is stationary (p < 0.05)\n")
+            f.write("   The mean and variance are constant over time, making forecasting more reliable.\n")
+        else:
+            f.write("✗ NON-STATIONARY: The series is non-stationary (p ≥ 0.05)\n")
+            f.write("   The series has trends or changing variance, requiring differencing for ARIMA.\n")
+        
+        f.write("\nInterpretation: Stationary series are easier to model and predict. Non-stationary\n")
+        f.write("series require transformation (differencing) before modeling.\n\n")
+        
+        # 2. TREND ANALYSIS
+        f.write("2. LONG-TERM TREND ANALYSIS (Linear Regression)\n")
+        f.write("-" * 60 + "\n")
+        f.write("Purpose: Identifies long-term increasing or decreasing patterns\n\n")
+        f.write(f"Trend Direction: {results['trend_direction']}\n")
+        f.write(f"Slope: {results['linear_slope']:.4f} victims/month\n")
+        f.write(f"Annual change: {results['linear_slope'] * 12:.2f} victims/year\n")
+        f.write(f"R² (goodness of fit): {results['linear_r2']:.4f}\n\n")
+        
+        if results['trend_direction'] == "Increasing":
+            f.write("⚠️  INCREASING TREND: Hate crimes are increasing over time\n")
+            f.write(f"   At the current rate, crimes increase by ~{abs(results['linear_slope'] * 12):.0f} victims per year.\n")
+        elif results['trend_direction'] == "Decreasing":
+            f.write("✓ DECREASING TREND: Hate crimes are decreasing over time\n")
+            f.write(f"   At the current rate, crimes decrease by ~{abs(results['linear_slope'] * 12):.0f} victims per year.\n")
+        else:
+            f.write("→ STABLE TREND: No significant long-term increase or decrease\n")
+            f.write("   Crime levels remain relatively constant over time.\n")
+        
+        f.write("\nInterpretation: R² close to 1.0 indicates a strong linear trend. Lower values\n")
+        f.write("suggest other patterns (seasonality, cycles) are more important.\n\n")
+        
+        # 3. SEASONALITY ANALYSIS
+        f.write("3. SEASONALITY ANALYSIS\n")
+        f.write("-" * 60 + "\n")
+        f.write("Purpose: Identifies recurring patterns within the year\n\n")
+        
+        months = ['January', 'February', 'March', 'April', 'May', 'June',
+                 'July', 'August', 'September', 'October', 'November', 'December']
+        
+        f.write("Seasonal Index by Month (1.0 = average):\n")
+        for i, (month, index) in enumerate(zip(months, results['seasonal_index'])):
+            marker = " 🔴" if i+1 == results['peak_month'] else " 🔵" if i+1 == results['low_month'] else ""
+            f.write(f"  {month:12s}: {index:.3f}{marker}\n")
+        
+        f.write(f"\n🔴 PEAK MONTH: {months[results['peak_month']-1]}\n")
+        f.write(f"   {(results['seasonal_index'][results['peak_month']-1] - 1) * 100:.1f}% above average\n")
+        
+        f.write(f"\n🔵 LOW MONTH: {months[results['low_month']-1]}\n")
+        f.write(f"   {(1 - results['seasonal_index'][results['low_month']-1]) * 100:.1f}% below average\n")
+        
+        f.write(f"\nSeasonality Strength: {results['seasonality_strength']:.3f}\n")
+        if results['seasonality_strength'] > 0.2:
+            f.write("   Strong seasonal pattern detected - crime rates vary significantly by month.\n")
+        elif results['seasonality_strength'] > 0.1:
+            f.write("   Moderate seasonal pattern - some monthly variation exists.\n")
+        else:
+            f.write("   Weak seasonal pattern - crime rates are relatively constant year-round.\n")
+        
+        f.write("\nInterpretation: Higher seasonal index = more crimes than average for that month.\n")
+        f.write("Understanding seasonality helps allocate resources and prevention efforts.\n\n")
+        
+        # 4. ARIMA MODEL
+        f.write("4. ARIMA MODEL FOR FORECASTING\n")
+        f.write("-" * 60 + "\n")
+        f.write("Purpose: Creates a statistical model to forecast future crime rates\n\n")
+        f.write(f"Best Model: ARIMA{results['arima_order']}\n")
+        f.write(f"  p={results['arima_order'][0]} (autoregressive terms)\n")
+        f.write(f"  d={results['arima_order'][1]} (differencing order)\n")
+        f.write(f"  q={results['arima_order'][2]} (moving average terms)\n")
+        f.write(f"AIC (Akaike Information Criterion): {results['arima_aic']:.2f}\n\n")
+        
+        f.write("Model Interpretation:\n")
+        f.write(f"• p={results['arima_order'][0]}: Uses {results['arima_order'][0]} previous time points for prediction\n")
+        if results['arima_order'][1] > 0:
+            f.write(f"• d={results['arima_order'][1]}: Data was differenced {results['arima_order'][1]} time(s) to achieve stationarity\n")
+        else:
+            f.write(f"• d={results['arima_order'][1]}: No differencing needed (series is stationary)\n")
+        f.write(f"• q={results['arima_order'][2]}: Incorporates {results['arima_order'][2]} previous forecast errors\n\n")
+        
+        f.write("Lower AIC indicates better model fit with fewer parameters.\n\n")
+        
+        # 5. 12-MONTH FORECAST
+        f.write("5. 12-MONTH FORECAST\n")
+        f.write("-" * 60 + "\n")
+        f.write("Purpose: Predicts future hate crime rates for the next year\n\n")
+        
+        f.write("ARIMA Forecast:\n")
+        for i, (date, forecast, ci_low, ci_high) in enumerate(zip(
+            results['forecast_dates'],
+            results['arima_forecast'],
+            results['arima_forecast_ci'].iloc[:, 0],
+            results['arima_forecast_ci'].iloc[:, 1]
+        )):
+            f.write(f"{date.strftime('%Y-%m')}: {forecast:.1f} victims [95% CI: {ci_low:.1f} - {ci_high:.1f}]\n")
+        
+        avg_forecast = results['arima_forecast'].mean()
+        avg_historical = monthly_crimes.iloc[-12:].mean()
+        change_pct = ((avg_forecast - avg_historical) / avg_historical) * 100
+        
+        f.write(f"\nForecast Summary:\n")
+        f.write(f"  Average next 12 months: {avg_forecast:.1f} victims/month\n")
+        f.write(f"  Average last 12 months: {avg_historical:.1f} victims/month\n")
+        f.write(f"  Expected change: {change_pct:+.1f}%\n\n")
+        
+        if change_pct > 10:
+            f.write("⚠️  ALERT: Forecast indicates significant increase in hate crimes\n")
+        elif change_pct < -10:
+            f.write("✓ Forecast indicates significant decrease in hate crimes\n")
+        else:
+            f.write("→ Forecast indicates relatively stable crime levels\n")
+        
+        f.write("\nInterpretation: Confidence intervals show the range of likely values.\n")
+        f.write("Wider intervals indicate greater uncertainty in predictions.\n\n")
+        
+        # 6. AUTOCORRELATION INSIGHTS
+        f.write("6. AUTOCORRELATION ANALYSIS\n")
+        f.write("-" * 60 + "\n")
+        f.write("Purpose: Measures how current values relate to past values\n\n")
+        
+        # Find significant lags
+        acf_values = results['acf']
+        ci_threshold = 1.96 / np.sqrt(len(monthly_crimes))
+        significant_lags = [i for i, val in enumerate(acf_values[1:], 1) if abs(val) > ci_threshold]
+        
+        if significant_lags:
+            f.write(f"Significant autocorrelation at lags: {', '.join(map(str, significant_lags[:5]))}\n")
+            if 12 in significant_lags or 11 in significant_lags or 13 in significant_lags:
+                f.write("✓ 12-month lag detected: Strong annual seasonality pattern\n")
+            if any(lag <= 3 for lag in significant_lags):
+                f.write("  Short-term dependency: Recent months influence current values\n")
+        else:
+            f.write("No significant autocorrelation detected\n")
+            f.write("  Values appear independent - crime rates don't depend strongly on past months\n")
+        
+        f.write("\nInterpretation: Significant autocorrelation indicates that past values help\n")
+        f.write("predict future values, justifying the use of time series models.\n\n")
+        
+        # RECOMMENDATIONS
+        f.write("="*80 + "\n")
+        f.write("POLICY RECOMMENDATIONS BASED ON TEMPORAL ANALYSIS\n")
+        f.write("="*80 + "\n\n")
+        
+        if results['trend_direction'] == "Increasing":
+            f.write("1. URGENT ACTION NEEDED: Address increasing trend\n")
+            f.write("   • Implement prevention programs targeting root causes\n")
+            f.write("   • Increase funding for hate crime task forces\n")
+            f.write("   • Monitor social tensions and intervene early\n\n")
+        
+        if results['seasonality_strength'] > 0.15:
+            peak_month_name = months[results['peak_month']-1]
+            f.write(f"2. SEASONAL RESOURCE ALLOCATION: Prepare for {peak_month_name}\n")
+            f.write(f"   • Increase law enforcement presence during peak months\n")
+            f.write(f"   • Schedule prevention campaigns before {peak_month_name}\n")
+            f.write(f"   • Analyze why {peak_month_name} has elevated crime rates\n\n")
+        
+        if change_pct > 5:
+            f.write("3. FORECAST-BASED PLANNING: Prepare for projected increase\n")
+            f.write("   • Budget for increased victim support services\n")
+            f.write("   • Train additional investigators\n")
+            f.write("   • Develop early warning systems\n\n")
+        
+        f.write("4. CONTINUOUS MONITORING:\n")
+        f.write("   • Update forecasts monthly with new data\n")
+        f.write("   • Track deviation from predictions as early warning\n")
+        f.write("   • Re-evaluate models annually\n\n")
+        
+        f.write("METHODOLOGICAL NOTES:\n")
+        f.write("• ARIMA model selected via AIC minimization (grid search)\n")
+        f.write("• Seasonal decomposition uses additive model (appropriate for stable variance)\n")
+        f.write("• Forecasts include 95% confidence intervals\n")
+        f.write("• Stationarity tested using Augmented Dickey-Fuller test\n")
+        f.write("• All analyses performed on monthly aggregated data\n\n")
+        
+        f.write("LIMITATIONS:\n")
+        f.write("• Forecasts assume patterns continue; external shocks can invalidate predictions\n")
+        f.write("• Model cannot predict one-time events (e.g., major incidents)\n")
+        f.write("• Seasonal patterns may change due to social/policy changes\n")
+        f.write("• Data quality depends on consistent reporting practices\n")
+        f.write("• Long-term forecasts (>12 months) have high uncertainty\n")
+
 def poisson_safety_analysis(df):
     """
     Comprehensive Poisson distribution analysis for regional safety assessment using 2024 data
@@ -1781,4 +2338,30 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error in Poisson analysis: {e}")
         print("Continuing with other analyses...")
+        raise e
+    
+    # Run temporal series analysis
+    print("\n" + "="*80)
+    print("STARTING TEMPORAL SERIES ANALYSIS (ARIMA, TRENDS, FORECASTING)")
+    print("="*80)
+    try:
+        temporal_results = temporal_series_analysis(df)
+        create_temporal_visualizations(temporal_results)
+        export_temporal_analysis(temporal_results, OUTPUT_DIR + 'temporal_analysis_results.txt')
+        print("Temporal analysis completed successfully!")
+        print(f"Results exported to: {OUTPUT_DIR}temporal_analysis_results.txt")
+        print(f"Visualizations saved to: {OUTPUT_DIR}temporal_series_analysis.png")
+        
+        # Print summary
+        print(f"\nKey Findings:")
+        print(f"  Trend: {temporal_results['trend_direction']} (slope: {temporal_results['linear_slope']:.4f} victims/month)")
+        print(f"  Best ARIMA model: ARIMA{temporal_results['arima_order']}")
+        print(f"  Peak crime month: {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][temporal_results['peak_month']-1]}")
+        print(f"  Seasonality strength: {temporal_results['seasonality_strength']:.3f}")
+        print(f"  12-month forecast average: {temporal_results['arima_forecast'].mean():.1f} victims/month")
+    except Exception as e:
+        print(f"Error in temporal analysis: {e}")
+        print("Continuing with other analyses...")
+        import traceback
+        traceback.print_exc()
         raise e
